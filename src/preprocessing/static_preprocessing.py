@@ -148,7 +148,7 @@ def preprocess_icustays(df):
     return add_prefix_to_columns(df, 'icu')
 
 
-def merge_ecg(hosp_master_df, record_list_df):
+def merge_ecg_to_hosp(hosp_master_df, record_list_df):
     df = hosp_master_df.reset_index(drop=True).copy()
     df["_row_idx"] = df.index
 
@@ -201,7 +201,7 @@ def merge_ecg(hosp_master_df, record_list_df):
 
 
 
-def merge_hosp(admissions_df, patients_df, diagnosis_df, drgcodes_df, icustays_df, edstays_df, ed_diagnosis_df):
+def merge_hosp_to_ed(admissions_df, patients_df, diagnosis_df, drgcodes_df, icustays_df, edstays_df, ed_diagnosis_df):
     """
     Merge all hospital-related dataframes into a master hospital dataframe.
     
@@ -212,7 +212,7 @@ def merge_hosp(admissions_df, patients_df, diagnosis_df, drgcodes_df, icustays_d
         drgcodes_df: Preprocessed DRG codes data
         icustays_df: Aggregated ICU stays data
         edstays_df: ED stays data
-        edstays_df: Cleaned ED diagnosis
+        ed_diagnosis_df: Cleaned ED diagnosis
     
     Returns:
         Merged master hospital dataframe
@@ -226,19 +226,18 @@ def merge_hosp(admissions_df, patients_df, diagnosis_df, drgcodes_df, icustays_d
     hosp_master_df = hosp_master_df.merge(diagnosis_df, on=["subject_id", "hadm_id"], how="left")
     hosp_master_df = hosp_master_df.merge(drgcodes_df, on=["subject_id", "hadm_id"], how="left")
     hosp_master_df = hosp_master_df.merge(icustays_df, on=["subject_id", "hadm_id"], how="left")
-    
-    # Outer join to capture ED-only visits
-    hosp_master_df = hosp_master_df.merge(
-        edstays_df,
-        on=['subject_id', 'hadm_id'],
-        how="outer"
-    )
-    
 
-    hosp_master_df = hosp_master_df.merge(
+    ed_master_df = edstays_df.merge(
         ed_diagnosis_df,
         on=["subject_id", "ed_stay_id"],
         how="left"
+    )
+
+    # Outer join to capture ED-only visits
+    hosp_master_df = ed_master_df.merge(
+        hosp_master_df,
+        on=['subject_id', 'hadm_id'],
+        how="outer"
     )
 
     return hosp_master_df
@@ -292,7 +291,7 @@ def run_static_preprocessing(in_dir, config_path, out_path):
     edstays_cleaned = add_prefix_to_columns(edstays_cleaned, 'ed')
     
     print("[11/12] Merging hospital data...")
-    hosp_master = merge_hosp(
+    hosp_master = merge_hosp_to_ed(
         admissions_processed,
         patients_processed,
         hosp_diagnosis_cleaned,
@@ -303,7 +302,7 @@ def run_static_preprocessing(in_dir, config_path, out_path):
     )
     
     print("[12/12] Merging ECG records...")
-    static_master = merge_ecg(hosp_master, record_list_processed)
+    static_master = merge_ecg_to_hosp(hosp_master, record_list_processed)
     
     print("\n" + "=" * 60)
     print(f"Final dataset shape: {static_master.shape}")
