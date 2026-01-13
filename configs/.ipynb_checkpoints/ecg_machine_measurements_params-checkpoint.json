@@ -1,0 +1,6 @@
+{
+  "paths": {
+    "in_path": "data/raw/static/machine_measurements.csv",
+    "out_path": "data/processed/ecg_machine_measurements_processed.csv"
+  }
+}

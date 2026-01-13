@@ -1,0 +1,28 @@
+{
+    "paths": {
+        "in_dir": "data/raw/temporal",
+        "out_dir": "data/processed/temporal"
+    },
+    "dynamic_sources": {
+        "icustays": "icustays.csv",
+        "icu_chartevents": "icu_chartevents.csv",
+        "icu_labevents": "icu_labevents.csv",
+        "icu_inputevents": "icu_inputevents.csv",
+        "icu_procedureevents": "icu_procedureevents.csv",
+        "icu_ingredientevents": "icu_ingredientevents.csv",
+        "icu_datetimeevents": "datetimeevents.csv",
+        "hosp_procedures": "hosp_procedures_icd.csv",
+        "hosp_labevents": "hosp_labevents.csv",
+        "hosp_microbiologyevents": "hosp_microbiologyevents.csv",
+        "hosp_emar": "hosp_emar.csv",
+        "hosp_pharmacy": "hosp_pharmacy.csv",
+        "hosp_prescriptions": "hosp_prescriptions.csv",
+        "hosp_hcpcsevents": "hosp_hcpcsevent.csv",
+        "hosp_transfers": "hosp_transfers.csv",
+        "ed_vitalsign": "ed_vitalsign.csv",
+        "ed_triage": "ed_triage.csv",
+        "ed_medrecon": "ed_medrecon.csv",
+        "ed_pyxis": "ed_pyxis.csv",
+        "ecg_machine_measurements": "machine_measurements.csv"
+    }
+}
