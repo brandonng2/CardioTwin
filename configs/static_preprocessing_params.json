@@ -7,10 +7,8 @@
         "admissions": "admissions.csv",
         "patients": "patients.csv",
         "hosp_diagnosis": "diagnosis_icd.csv",
-        "drgcodes": "drgcodes.csv",
         "icustays": "icustays.csv",
         "edstays": "edstays.csv",
-        "ed_diagnosis": "ed_diagnosis.csv",
-        "record_list": "ecg_record_list.csv"
+        "ed_diagnosis": "ed_diagnosis.csv"
     }
 }
