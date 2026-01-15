@@ -1,24 +1,14 @@
-# file: src/preprocessing/clinical_entity_extraction.py
 import pandas as pd
 import ast
 import icd10
 
-# -----------------------------
-# 1. Parsing ICD lists
-# -----------------------------
-def parse_icd_list(x):
-    if isinstance(x, list):
-        return x
-    if isinstance(x, str):
-        try:
-            return ast.literal_eval(x)
-        except:
-            return None
-    return None
 
-# -----------------------------
-# 2. Normalize ICD codes
-# -----------------------------
+def parse_icd_list(x):
+    if isinstance(x, str):
+        return ast.literal_eval(x)
+    return x
+
+
 def normalize_icd(code):
     if code is None:
         return None

@@ -3,8 +3,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 from src.preprocessing.static_preprocessing import run_static_preprocessing
-from src.preprocessing.icd_entity_extraction import run_entity_extraction
-from src.preprocessing.ecg_machine_measurements_processing import run_ecg_machine_measurements_preprocessing
+from src.preprocessing.ecg_preprocessing import run_ecg_machine_measurements_preprocessing
 
 
 def load_config(config_path):
@@ -37,13 +36,12 @@ def main():
     skip_ecg_mm = "--skip-ecg-mm" in sys.argv
 
     if not skip_ecg_mm:
-        ecg_config = load_config("configs/ecg_machine_measurements_params.json")
+        ecg_config = load_config("configs/ecg_preprocessing_params.json")
 
-        run_ecg_machine_measurements_preprocessing(
-            ecg_config["paths"]["in_path"],
-            "configs/ecg_machine_measurements_params.json",
-            ecg_config["paths"]["out_path"]
-        )
+        in_dir = Path(ecg_config["paths"]["in_dir"])
+        out_path = Path(ecg_config["paths"]["out_dir"])
+
+        run_ecg_machine_measurements_preprocessing(in_dir, "configs/ecg_machine_measurements_params.json", out_path)
     else:
         print("Skipping ECG machine measurements preprocessing")
 
@@ -65,13 +63,6 @@ def main():
     else:
         print("Skipping clinical entity extraction since static preprocessing was skipped")
 
-    
-    # --- Temporal Preprocessing ---
-    # TODO: Temporal Preprocessing (not yet implemented)
-    # if not skip_temporal:
-    #     print("\nRunning temporal preprocessing...")
-    #     temporal_config = load_config("configs/temporal_preprocessing.json")
-    #     run_temporal_preprocessing(...)
     
     print("\n" + "=" * 60)
     print("ALL PREPROCSSING COMPLETED!")

@@ -1,0 +1,12 @@
+{
+    "paths": {
+        "raw_dir": "data/raw/",
+        "processed_dir": "data/processed/",
+        "out_dir": "data/processed/ecg_master.csv"
+    },
+    "sources": {
+        "machine_measurements": "machine_measurements.csv",
+        "record": "record_list.csv",
+        "clinical_encounters": "clinical_encounters.csv"
+    }
+}

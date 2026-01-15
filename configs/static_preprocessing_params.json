@@ -1,9 +1,9 @@
 {
     "paths": {
-        "in_dir": "data/raw/static",
-        "out_dir": "data/processed/static/static_features.csv"
+        "in_dir": "data/raw/",
+        "out_dir": "data/processed/clinical_encounters.csv"
     },
-    "static_sources": {
+    "sources": {
         "admissions": "admissions.csv",
         "patients": "patients.csv",
         "hosp_diagnosis": "diagnoses_icd.csv",

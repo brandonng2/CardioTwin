@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 import pandas as pd
-import numpy as np
 
 def load_config(config_path):
     """Load configuration from JSON file."""
@@ -14,7 +13,7 @@ def load_static_data(in_dir, config):
     """Load all static CSV files specified in config."""
 
     in_dir = Path(in_dir)
-    s = config["static_sources"]
+    s = config["sources"]
     
     patients = pd.read_csv(in_dir / s["patients"])
     admissions = pd.read_csv(in_dir / s["admissions"])
@@ -112,10 +111,14 @@ def clean_diagnosis_data(df, prefix):
 
 def preprocess_icustays(df):
     """Aggregate ICU stays per admission into lists and add stay count."""
-    df = clean_cols_types(df)
+    temporal_cols = ['stay_id', 'intime', 'outtime']
     
-    df = df.drop(columns=['first_careunit', 'last_careunit', 'los'])
+    df = df.groupby(['subject_id', 'hadm_id'], sort=False).agg({
+        col: list for col in temporal_cols
+    }).reset_index()
     
+    df['count'] = df['stay_id'].apply(lambda x: len(x) if isinstance(x, list) else 0)
+
     return add_prefix_to_columns(df, 'icu')
 
 def preprocess_edstays(df):
@@ -127,6 +130,7 @@ def preprocess_edstays(df):
     df = df.drop(columns=['arrival_transport', 'disposition'])
     
     return add_prefix_to_columns(df, 'ed')
+
 
 def merge_hosp_to_ed(admissions_df, patients_df, diagnosis_df, icustays_df, edstays_df, ed_diagnosis_df):
     """
@@ -162,11 +166,40 @@ def merge_hosp_to_ed(admissions_df, patients_df, diagnosis_df, icustays_df, edst
     # Outer join to capture ED-only visits
     hosp_master_df = ed_master_df.merge(
         hosp_master_df,
-        on=['subject_id', 'hadm_id'],
+        on=['subject_id', 'hadm_id'], 
         how="outer"
     )
 
+    # Keep rows where timestamps match, or one side is missing
+    mask_intime = (
+        (hosp_master_df['ed_intime'] == hosp_master_df['edregtime']) |
+        hosp_master_df['ed_intime'].isna() |
+        hosp_master_df['edregtime'].isna()
+    )
+    mask_outtime = (
+        (hosp_master_df['ed_outtime'] == hosp_master_df['edouttime']) |
+        hosp_master_df['ed_outtime'].isna() |
+        hosp_master_df['edouttime'].isna()
+    )
+
+    # Only keep rows where both intime and outtime pass the filter
+    hosp_master_df = hosp_master_df[mask_intime & mask_outtime].copy()
+
     return hosp_master_df
+
+
+def clean_master_df(df):
+    df['gender'] = df['gender'].combine_first(df['ed_gender'])
+    df['race'] = df['race'].combine_first(df['ed_race'])
+    df['diagnosis'] = df['hosp_diagnosis'].combine_first(df['ed_diagnosis'])
+    df['icd_codes'] = df['hosp_icd_codes_diagnosis'].combine_first(df['ed_icd_codes_diagnosis'])
+
+    df = df.drop(columns=['edregtime', 'edouttime',
+                          'ed_gender', 'ed_race', 
+                          'hosp_diagnosis', 'ed_diagnosis',
+                          'hosp_icd_codes_diagnosis', 'ed_icd_codes_diagnosis'])
+
+    return df
 
 
 def run_static_preprocessing(in_dir, config_path, out_path):
@@ -181,34 +214,34 @@ def run_static_preprocessing(in_dir, config_path, out_path):
     Returns:
         DataFrame with all processed static features
     """
-    print("Running static preprocessing...")
+    print("Running clinical encounters preprocessing...")
     
-    print("\n[1/9] Loading configuration...")
+    print("\n[1/10] Loading configuration...")
     config = load_config(config_path)
     
-    print("[2/9] Loading raw data...")
+    print("[2/10] Loading raw data...")
     (patients, admissions, hosp_diagnosis, 
      icustays, edstays, ed_diagnosis) = load_static_data(in_dir, config)
 
-    print("[3/9] Preprocessing patients...")
+    print("[3/10] Preprocessing patients...")
     patients_processed = preprocess_patient(patients)
     
-    print("[4/9] Preprocessing admissions...")
+    print("[4/10] Preprocessing admissions...")
     admissions_processed = preprocess_admissions(admissions)
     
-    print("[5/9] Cleaning hospital diagnosis data...")
+    print("[5/10] Cleaning hospital diagnosis data...")
     hosp_diagnosis_cleaned = clean_diagnosis_data(hosp_diagnosis, prefix="hosp")
     
-    print("[6/9] Cleaning ED diagnosis data...")
+    print("[6/10] Cleaning ED diagnosis data...")
     ed_diagnosis_cleaned = clean_diagnosis_data(ed_diagnosis, prefix="ed")
     
-    print("[7/9] Preprocessing ICU stays...")
+    print("[7/10] Preprocessing ICU stays...")
     icustays_agg = preprocess_icustays(icustays)
 
-    print("[8/9] Cleaning ED stays...")
+    print("[8/10] Cleaning ED stays...")
     edstays_cleaned = preprocess_edstays(edstays)
     
-    print("[9/9] Merging hospital data...")
+    print("[9/10] Merging emergency and hospital data...")
     hosp_master = merge_hosp_to_ed(
         admissions_processed,
         patients_processed,
@@ -217,15 +250,17 @@ def run_static_preprocessing(in_dir, config_path, out_path):
         edstays_cleaned,
         ed_diagnosis_cleaned
     )
+
+    print("[10/10] Cleaning merged dataset...")
+    master_clinical_encounters = clean_master_df(hosp_master)
     
-    print("\n" + "=" * 60)
-    print(f"Final dataset shape: {hosp_master.shape}")
-    print(f"Number of columns: {len(hosp_master.columns)}")
-    print("=" * 60)
-    
-    print(f"\nSaving to {out_path}...")
+    print("-" * 60)
+    print(f"Final dataset shape: {master_clinical_encounters.shape}")
+    print(f"Number of columns: {len(master_clinical_encounters.columns)}")
+    print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    hosp_master.to_csv(out_path, index=False)
-    
-    print("Static preprocessing complete!")
-    return hosp_master
+    master_clinical_encounters.to_csv(out_path, index=False)
+    print("Clinical encounters preprocessing complete!")
+    print("-" * 60)
+
+    return master_clinical_encounters

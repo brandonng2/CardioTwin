@@ -8,4 +8,4 @@ scikit-learn==1.3.0
 matplotlib==3.8.0
 # notebook==7.9.1
 ipython==8.17.0
-icd10==2.0.0  
+icd10-cm==0.0.5
