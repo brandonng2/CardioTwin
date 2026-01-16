@@ -1,7 +1,11 @@
 {
     "paths": {
-        "in_dir": "data/raw/",
-        "out_dir": "data/processed/vitals_data.csv"
+        "in_dir": "data/raw/static",
+        "out_dir": "data/processed/vitals_final.csv"
     },
-    "sources": {}
+    "sources": {
+        "omr": "omr_vitals.csv",
+        "ed_vitals": "ed_vitals.csv",
+        "lab_events": "lab_events_vitals.csv"
+    }
 }

@@ -1,6 +1,6 @@
 {
     "paths": {
-        "in_dir": "data/raw/",
+        "in_dir": "data/raw/static",
         "out_dir": "data/processed/clinical_encounters.csv"
     },
     "sources": {

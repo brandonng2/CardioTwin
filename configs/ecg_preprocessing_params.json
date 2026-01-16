@@ -1,6 +1,6 @@
 {
     "paths": {
-        "in_dir": "data/raw/",
+        "in_dir": "data/raw/static",
         "processed_dir": "data/processed/",
         "out_dir": "data/processed/ecg_data.csv"
     },

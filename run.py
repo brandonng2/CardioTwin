@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
+from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
+
 
 
 def load_config(config_path):
@@ -38,10 +40,20 @@ def run_ecg(args):
     in_dir = Path(ecg_config["paths"]["in_dir"])
     out_path = Path(ecg_config["paths"]["out_dir"])
     
-    run_ecg_preprocessing(in_dir, "configs/ecg_machine_measurements_params.json", out_path)
+    run_ecg_preprocessing(in_dir, "configs/ecg_preprocessing_params.json", out_path)
     print("✓ ECG preprocessing completed")
     return out_path
 
+def run_vitals(args):
+    """Run vitals preprocessing."""
+    print("\n" + "=" * 60)
+    print("VITALS PREPROCESSING")
+    print("=" * 60)
+    
+    vitals_config_path = "configs/vitals_preprocessing_params.json"
+    run_vitals_preprocessing(vitals_config_path)
+    
+    print("✓ Vitals preprocessing completed")
 
 def run_entity_extraction(args, static_master_path=None):
     """Run clinical entity extraction."""
@@ -83,17 +95,19 @@ def main():
     parser.add_argument("--all", action="store_true", help="Run all preprocessing steps")
     parser.add_argument("--static", action="store_true", help="Run static preprocessing")
     parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
-    parser.add_argument("--entities", action="store_true", help="Run entity extraction")
+    parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
+    parser.add_argument("--entities", action="store_true", help="Run entity extraction")  
     
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
     parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
+    parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")  
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
-    
+        
     args = parser.parse_args()
     
     # Determine what to run
-    run_all = args.all or not any([args.static, args.ecg, args.entities])
+    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities])
     
     print("=" * 60)
     print("MIMIC-IV PREPROCESSING PIPELINE")
@@ -108,6 +122,10 @@ def main():
     # ECG preprocessing
     if (run_all and not args.skip_ecg) or args.ecg:
         run_ecg(args)
+
+    # Vitals preprocessing
+    if (run_all and not args.skip_vitals) or args.vitals:
+        run_vitals(args)
     
     # Entity extraction
     if (run_all and not args.skip_entities) or args.entities:

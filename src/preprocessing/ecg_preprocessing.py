@@ -278,7 +278,8 @@ def run_ecg_preprocessing(in_dir, config_path, out_path):
     config = load_config(config_path)
 
     print("[2/5] Loading raw data...")
-    ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, config)
+    processed_dir = Path(config["paths"]["processed_dir"])
+    ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, processed_dir, config)
 
     print("[3/5] Preprocessing machine measurements...")
     cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
