@@ -1,9 +1,10 @@
 import json
 import sys
+import argparse
 from pathlib import Path
 import pandas as pd
 from src.preprocessing.static_preprocessing import run_static_preprocessing
-from src.preprocessing.ecg_preprocessing import run_ecg_machine_measurements_preprocessing
+from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 
 
 def load_config(config_path):
@@ -11,63 +12,111 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         return json.load(f)
 
-def main():
-    # Check for skip flags
-    skip_static = "--skip-static" in sys.argv
 
+def run_static(args):
+    """Run static preprocessing."""
+    print("\n" + "=" * 60)
+    print("STATIC PREPROCESSING")
+    print("=" * 60)
+    
+    static_config = load_config("configs/static_preprocessing_params.json")
+    in_dir = Path(static_config["paths"]["in_dir"])
+    out_path = Path(static_config["paths"]["out_dir"])
+    
+    run_static_preprocessing(in_dir, "configs/static_preprocessing_params.json", out_path)
+    print("✓ Static preprocessing completed")
+    return out_path
+
+
+def run_ecg(args):
+    """Run ECG preprocessing."""
+    print("\n" + "=" * 60)
+    print("ECG PREPROCESSING")
+    print("=" * 60)
+    
+    ecg_config = load_config("configs/ecg_preprocessing_params.json")
+    in_dir = Path(ecg_config["paths"]["in_dir"])
+    out_path = Path(ecg_config["paths"]["out_dir"])
+    
+    run_ecg_preprocessing(in_dir, "configs/ecg_machine_measurements_params.json", out_path)
+    print("✓ ECG preprocessing completed")
+    return out_path
+
+
+def run_entity_extraction(args, static_master_path=None):
+    """Run clinical entity extraction."""
+    print("\n" + "=" * 60)
+    print("ENTITY EXTRACTION")
+    print("=" * 60)
+    
+    if static_master_path is None:
+        static_config = load_config("configs/static_preprocessing_params.json")
+        static_master_path = Path(static_config["paths"]["out_dir"])
+    
+    entity_out_path = static_master_path.parent / "static_master_with_entities.csv"
+    static_master = pd.read_csv(static_master_path)
+    
+    from src.preprocessing.icd_entity_extraction import run_entity_extraction
+    static_master = run_entity_extraction(static_master, entity_out_path)
+    print(f"✓ Entity extraction completed. Saved to {entity_out_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+  Examples:
+  # Run everything
+  python run.py --all
+  
+  # Run specific steps
+  python run.py --static --ecg
+  python run.py --ecg
+  
+  # Run everything except certain steps
+  python run.py --all --skip-static
+        """
+    )
+    
+    # Run specific components
+    parser.add_argument("--all", action="store_true", help="Run all preprocessing steps")
+    parser.add_argument("--static", action="store_true", help="Run static preprocessing")
+    parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
+    parser.add_argument("--entities", action="store_true", help="Run entity extraction")
+    
+    # Skip flags (for use with --all)
+    parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
+    parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
+    parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
+    
+    args = parser.parse_args()
+    
+    # Determine what to run
+    run_all = args.all or not any([args.static, args.ecg, args.entities])
+    
     print("=" * 60)
     print("MIMIC-IV PREPROCESSING PIPELINE")
     print("=" * 60)
-    print()
     
+    static_master_path = None
     
-    # --- Static Preprocessing ---
-    if not skip_static:
-        static_config = load_config("configs/static_preprocessing_params.json")
-        
-        in_dir = Path(static_config["paths"]["in_dir"])
-        out_path = Path(static_config["paths"]["out_dir"])
-        
-        run_static_preprocessing(in_dir, "configs/static_preprocessing_params.json", out_path)
-    else:
-        print("Skipping static preprocessing")
-
-    # --- ECG Machine Measurements ---
-    skip_ecg_mm = "--skip-ecg-mm" in sys.argv
-
-    if not skip_ecg_mm:
-        ecg_config = load_config("configs/ecg_preprocessing_params.json")
-
-        in_dir = Path(ecg_config["paths"]["in_dir"])
-        out_path = Path(ecg_config["paths"]["out_dir"])
-
-        run_ecg_machine_measurements_preprocessing(in_dir, "configs/ecg_machine_measurements_params.json", out_path)
-    else:
-        print("Skipping ECG machine measurements preprocessing")
-
-
-    # --- Clinical Entity Extraction ---
-    if not skip_static:
-        # Output from static preprocessing
-        static_master_path = out_path
-        entity_out_path = out_path.parent / "static_master_with_entities.csv"
-
-        # Load static master
-        static_master = pd.read_csv(static_master_path)
-
-        # Run the new modular clinical entity extraction
-        from src.preprocessing.icd_entity_extraction import run_entity_extraction
-
-        static_master = run_entity_extraction(static_master, entity_out_path)
-        print(f"Clinical entity extraction completed. Saved to {entity_out_path}")
-    else:
-        print("Skipping clinical entity extraction since static preprocessing was skipped")
-
+    # Static preprocessing
+    if (run_all and not args.skip_static) or args.static:
+        static_master_path = run_static(args)
+    
+    # ECG preprocessing
+    if (run_all and not args.skip_ecg) or args.ecg:
+        run_ecg(args)
+    
+    # Entity extraction
+    if (run_all and not args.skip_entities) or args.entities:
+        run_entity_extraction(args, static_master_path)
     
     print("\n" + "=" * 60)
-    print("ALL PREPROCSSING COMPLETED!")
+    print("ALL PREPROCESSING COMPLETED!")
     print("=" * 60)
-    
+
 
 if __name__ == "__main__":
     main()

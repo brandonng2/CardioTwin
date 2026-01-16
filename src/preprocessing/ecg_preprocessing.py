@@ -1,5 +1,3 @@
-# src/preprocessing/ecg_machine_measurements_processing.py
-
 import json
 from pathlib import Path
 import pandas as pd
@@ -273,8 +271,25 @@ def add_icu_indicator(merged_df):
 # Pipeline runner
 # -------------------------
 
-def run_ecg_machine_measurements_preprocessing(in_path, config_path, out_path):
+def run_ecg_preprocessing(in_dir, config_path, out_path):
     print("Running ECG preprocessing...")
+    
+    print("\n[1/5] Loading configuration...")
+    config = load_config(config_path)
+
+    print("[2/5] Loading raw data...")
+    ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, config)
+
+    print("[3/5] Preprocessing machine measurements...")
+    cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
+    final_machine_measurements = apply_phrase_labels(cleaned_machine_measurements)
+
+    print("[4/5] Preprocessing ECG records...")
+    merged = match_ecg_to_encounters(ecg_record, clinical_encounters)
+    final_ecg_record_list = add_icu_indicator(merged)
+
+    print("[5/5] Creating ECG dataset...")
+    master_ecg = final_ecg_record_list.merge(final_machine_measurements, on=['subject_id', 'study_id', 'ecg_time'], how='inner')
 
     print("-" * 60)
     print(f"Final dataset shape: {master_ecg.shape}")
@@ -286,4 +301,4 @@ def run_ecg_machine_measurements_preprocessing(in_path, config_path, out_path):
     print("ECG preprocessing complete!")
     print("-" * 60)
 
-    return
+    return master_ecg

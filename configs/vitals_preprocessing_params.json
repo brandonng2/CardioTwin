@@ -1,0 +1,7 @@
+{
+    "paths": {
+        "in_dir": "data/raw/",
+        "out_dir": "data/processed/vitals_data.csv"
+    },
+    "sources": {}
+}
