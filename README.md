@@ -1,42 +1,46 @@
 # ClinicalDigitalTwin
 
 A clean, modular pipeline for preprocessing MIMIC-IV data (Hospital, ICU, ED, and ECG) for clinical digital twin modeling.  
-**Note:** Temporal preprocessing is still in progress.
+**Note:** Model creation is still in progress.
 
 ## Project Overview
 
 This repository provides an end-to-end framework for preparing integrated MIMIC-IV datasets for clinical digital twin modeling. It combines data from:
 
-- **MIMIC-IV:** Core hospital and ICU data including admissions, diagnoses, procedures, and patient demographics
-- **MIMIC-IV-ED:** Emergency department visits and diagnoses
+- **MIMIC-IV:** Core hospital and ICU data including admissions, diagnoses, omr, labevents, vital signs, and patient demographics
+- **MIMIC-IV-ED:** Emergency department visits, diagnoses, and vitals
 - **MIMIC-IV-ECG:** Electrocardiogram recordings and measurements
 
-The pipeline supports both static (column-based) and temporal (row-based) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients who have ECG records.**
+The pipeline supports both static (column-based) and temporal (row-based) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular or cardiovascular-related diagnoses.**
 
 ## Project Structure
 ```
 .
 ├── configs/
 │   ├── static_preprocessing.json      # Configuration for static/column-based CSV preprocessing
-│   └── temporal_preprocessing.json    # Configuration for temporal/row-based CSV preprocessing
+│   ├── ecg_preprocessing.json         # Configuration for ECG signal preprocessing
+│   ├── icdcode_extractor.json         # Configuration for ICD code extraction and labeling
+│   └── vitals_preprocessing.json      # Configuration for vital signs preprocessing
 ├── data/
 │   ├── raw/                           # Raw input data files (e.g., MIMIC-IV CSVs)
-│   │   ├── static/                    # Raw static CSVs
-│   │   └── temporal/                  # Raw temporal CSVs
 │   └── processed/                     # Output of preprocessing scripts
-│       ├── static/                    # Processed static CSVs
-│       └── temporal/                  # Processed temporal CSVs
 ├── notebooks/                         # Jupyter notebooks for testing and exploration
+│   ├── static_preprocessing.ipynb     # Notebook for static preprocessing development
+│   ├── ecg_preprocessing.ipynb        # Notebook for ECG preprocessing development
+│   ├── icd_extraction.ipynb           # Notebook for ICD code extraction development
+│   ├── vitals_preprocessing.ipynb     # Notebook for vitals preprocessing development
 │   └── misc/                          # Miscellaneous notebooks
 ├── src/
 │   └── preprocessing/
 │       ├── static_preprocessing.py    # Functions to preprocess static/column-based data
-        ├── clinical_entity_extraction.py    # Functions to extracted cardiovascular clinical entities from diagnostic data
-│       └── temporal_preprocessing.py  # Functions to preprocess temporal/row-based data
+│       ├── ecg_preprocessing.py       # Functions to preprocess ECG signals
+│       ├── icd_entity_extraction.py   # Functions to extract cardiovascular clinical entities from ICD codes
+│       ├── icd_code_labels.py         # ICD-10 code label mappings for cardiovascular conditions
+│       ├── vitals_preprocessing.py    # Functions to preprocess vital signs data
+│       └── machine_measurements_labels.py  # Label mappings for machine measurements (e.g., ventilator, IABP)
 ├── run.py                             # Main script to execute the preprocessing pipeline
 ├── requirements.txt                   # Python dependencies
 └── README.md
-
 ```
 
 ## Prerequisites
@@ -162,22 +166,11 @@ WHERE eds.subject_id IN (
 )
 ```
 
-#### 8. Hospital Drgcode
-```sql
--- Save as: drgcodes.csv
-SELECT *
-FROM `physionet-data.mimiciv_3_1_hosp.drgcodes` AS dc
-WHERE dc.subject_id IN (
-  SELECT DISTINCT subject_id
-  FROM `physionet-data.mimiciv_ecg.machine_measurements`
-)
-```
-
 ### Data Placement
 
 After running these queries:
 1. Export each result as CSV from BigQuery
-2. Place all CSV files in the `data/raw/static` directory
+2. Place all CSV files in the `data/raw/` directory
 3. Ensure filenames match those specified in the SQL comments
 
 **Cohort Size:** All queries filter for patients with ECG records, resulting in a subset of the full MIMIC-IV population.
@@ -186,7 +179,7 @@ After running these queries:
 
 Alternatively, download complete datasets and filter locally:
 1. Download each dataset from PhysioNet (links above)
-2. Extract relevant CSV files to `data/raw/static`
+2. Extract relevant CSV files to `data/static`
 3. The preprocessing pipeline will automatically filter for ECG patients
 
 **Note:** BigQuery is more efficient for large-scale filtering.
@@ -206,29 +199,51 @@ pip install -r requirements.txt
 
 ### 3. Verify Data Placement
 
-Ensure all required CSV files are in `data/raw/static` before running preprocessing:
+Ensure all required CSV files are in `data/raw/` before running preprocessing:
 - `admissions.csv`
 - `diagnoses_icd.csv`
-- `drgcodes.csv`
-- `ecg_record_list.csv`
 - `ed_diagnosis.csv`
 - `edstays.csv`
 - `icustays.csv`
 - `machine_measurements.csv`
 - `patients.csv`
+- `record_list.csv`
 
 ## Usage
 
 ### Running the Preprocessing Pipeline
+
+The pipeline supports modular execution of preprocessing steps. You can run all steps or specific components:
 ```bash
-python run.py
+# Run all preprocessing steps
+python run.py --all
+
+# Run specific steps
+python run.py --static
+python run.py --ecg
+python run.py --vitals
+python run.py --entities
+
+# Run multiple specific steps
+python run.py --static --ecg --vitals
+
+# Run everything except certain steps
+python run.py --all --skip-static
+python run.py --all --skip-ecg
 ```
 
-This executes both static preprocessing, clinical entity extraction, and temporal preprocessing according to configuration files in `configs/`:
+#### Pipeline Components
 
-- **Static preprocessing:** Demographic, comorbidity, and baseline features from admissions and patient data
-- **Clinical Entity Extraction:** Extracting cardiovascular clinical keywords from diagnoses' data (**In Progress**)
-- **Temporal preprocessing:** Time-series events including ICU vitals, ED visits, procedures, and ECG measurements (**In Progress**)
+- **Static preprocessing (`--static`):** Demographic, comorbidity, and baseline features from admissions and patient data
+- **ECG preprocessing (`--ecg`):** ECG signal processing and feature extraction
+- **Vitals preprocessing (`--vitals`):** Time-series vital signs data processing
+- **ICD code extraction (`--entities`):** Extracting cardiovascular clinical labels from ICD-10 diagnosis codes
+
+Each step reads its configuration from the corresponding JSON file in `configs/`:
+- `static_preprocessing_params.json`
+- `ecg_preprocessing_params.json`
+- `vitals_preprocessing_params.json`
+- `icdcode_extractor_params.json`
 
 ### Exploratory Analysis
 
