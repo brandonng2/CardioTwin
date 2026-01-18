@@ -109,31 +109,3 @@ report_label_map = {
     **ADDITIONAL_RHYTHM_LABELS,
     **ADDITIONAL_FINDINGS,
 }
-
-
-# -------------------------
-# HELPER FUNCTIONS
-# -------------------------
-
-def get_all_labels():
-    """Return list of all label names."""
-    return list(report_label_map.keys())
-
-def get_labels_by_category():
-    """Return labels organized by category."""
-    return {
-        'rhythm': list(RHYTHM_LABELS.keys()),
-        'paced': list(PACED_RHYTHM_LABELS.keys()),
-        'conduction': list(CONDUCTION_LABELS.keys()),
-        'structural': list(STRUCTURAL_LABELS.keys()),
-        'repolarization': list(REPOLARIZATION_LABELS.keys()),
-        'ischemia': list(ISCHEMIA_LABELS.keys()),
-        'ectopy': list(ECTOPY_LABELS.keys()),
-        'impression': list(IMPRESSION_LABELS.keys()),
-        'technical': list(ADDITIONAL_FINDINGS.keys()),
-    }
-
-
-def get_patterns_for_label(label_name):
-    """Get all search patterns for a specific label."""
-    return report_label_map.get(label_name, [])

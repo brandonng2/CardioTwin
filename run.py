@@ -6,6 +6,7 @@ import pandas as pd
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
+from src.preprocessing.icd_entity_extraction import run_entity_extraction
 
 
 
@@ -42,7 +43,7 @@ def run_ecg(args):
     
     run_ecg_preprocessing(in_dir, "configs/ecg_preprocessing_params.json", out_path)
     print("✓ ECG preprocessing completed")
-    return out_path
+    return 
 
 def run_vitals(args):
     """Run vitals preprocessing."""
@@ -52,25 +53,19 @@ def run_vitals(args):
     
     vitals_config_path = "configs/vitals_preprocessing_params.json"
     run_vitals_preprocessing(vitals_config_path)
-    
     print("✓ Vitals preprocessing completed")
+    return 
 
-def run_entity_extraction(args, static_master_path=None):
+def run_icd_extraction(args):
     """Run clinical entity extraction."""
     print("\n" + "=" * 60)
     print("ENTITY EXTRACTION")
     print("=" * 60)
     
-    if static_master_path is None:
-        static_config = load_config("configs/static_preprocessing_params.json")
-        static_master_path = Path(static_config["paths"]["out_dir"])
-    
-    entity_out_path = static_master_path.parent / "static_master_with_entities.csv"
-    static_master = pd.read_csv(static_master_path)
-    
-    from src.preprocessing.icd_entity_extraction import run_entity_extraction
-    static_master = run_entity_extraction(static_master, entity_out_path)
-    print(f"✓ Entity extraction completed. Saved to {entity_out_path}")
+    icd_config_path = "configs/icdcode_extractor_params.json"
+    run_entity_extraction(icd_config_path)
+    print("✓ ICD code extraction completed")
+    return 
 
 
 def main():

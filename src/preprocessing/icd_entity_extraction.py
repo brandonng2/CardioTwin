@@ -1,393 +1,153 @@
+import json
+from pathlib import Path
 import pandas as pd
 import ast
-import icd10
+import numpy as np
+from .icd_code_labels import icd_code_labels
+from .icd_code_labels import noncardiovascular_labels
+from .icd_code_labels import cardiovascular_labels
 
 
-def parse_icd_list(x):
-    if isinstance(x, str):
-        return ast.literal_eval(x)
-    return x
+def load_config(config_path):
+    """Load preprocessing configuration from JSON file."""
+    with open(config_path, "r") as f:
+        return json.load(f)
+
+def load_clinical_data(config):
+    """Load clinical data from CSV files."""
+    in_dir = Path(config["in_dir"])
+    s = config["sources"]
+    clinical_encounters = pd.read_csv(in_dir / s["clinical_encounters"], dtype=str, low_memory=False)
+    
+    return clinical_encounters
 
 
 def normalize_icd(code):
     if code is None:
         return None
+    code = str(code)
     if len(code) > 3 and "." not in code:
         return code[:3] + "." + code[3:]
     return code
 
-# -----------------------------
-# 3. ICD codes -> descriptions
-# -----------------------------
-def icd_codes_to_descriptions(codes):
-    if not isinstance(codes, list):
-        return []
-    descs = []
-    for c in codes:
-        c_norm = normalize_icd(c)
-        try:
-            node = icd10.find(c_norm)
-            if node:
-                descs.append(node.description.lower())
-        except:
-            continue
-    return descs
-
-# -----------------------------
-# 4. Heart-only ICD filters
-# -----------------------------
-heart_only_icd_prefixes = [f"I{str(i).zfill(2)}" for i in range(20, 53)]
-
-def is_heart_icd(code):
-    if not isinstance(code, str):
-        return False
-    return any(code.startswith(prefix) for prefix in heart_only_icd_prefixes)
-
-def filter_heart_codes(icd_list):
-    if not isinstance(icd_list, list):
-        return []
-    return [c for c in icd_list if is_heart_icd(c)]
-
-# -----------------------------
-# 5. Canonical mapping
-# -----------------------------
-canonical_map = {
-    "heart failure": [
-        "chronic diastolic (congestive) heart failure",
-        "acute on chronic diastolic (congestive) heart failure",
-        "chronic systolic (congestive) heart failure",
-        "acute on chronic systolic (congestive) heart failure",
-        "heart failure, unspecified",
-        "end stage heart failure",
-        "biventricular heart failure",
-        "right heart failure, unspecified",
-        "left ventricular failure, unspecified",
-        "acute on chronic right heart failure",
-        "unspecified combined systolic (congestive) and diastolic (congestive) heart failure",
-        "chronic combined systolic (congestive) and diastolic (congestive) heart failure",
-        "acute combined systolic (congestive) and diastolic (congestive) heart failure",
-        "acute systolic (congestive) heart failure",
-        "acute diastolic (congestive) heart failure",
-        "chronic total occlusion of coronary artery",  # sometimes grouped under severe HF
-    ],
-    "myocardial infarction": [
-        "old myocardial infarction",
-        "non-st elevation (nstemi) myocardial infarction",
-        "st elevation (stemi) myocardial infarction of unspecified site",
-        "st elevation (stemi) myocardial infarction involving other coronary artery of inferior wall",
-        "st elevation (stemi) myocardial infarction involving other coronary artery of anterior wall",
-        "st elevation (stemi) myocardial infarction involving right coronary artery",
-        "myocardial infarction type 2",
-        "subsequent non-st elevation (nstemi) myocardial infarction",
-        "acute ischemic heart disease, unspecified",
-        "other forms of acute ischemic heart disease",
-        "acute coronary thrombosis not resulting in myocardial infarction",
-    ],
-    "atrial fibrillation": [
-        "unspecified atrial fibrillation",
-        "paroxysmal atrial fibrillation",
-        "chronic atrial fibrillation",
-        "persistent atrial fibrillation",
-    ],
-    "atrial flutter": [
-        "unspecified atrial flutter",
-        "typical atrial flutter",
-        "atypical atrial flutter",
-    ],
-    "cardiomyopathy": [
-        "cardiomyopathy, unspecified",
-        "ischemic cardiomyopathy",
-        "other cardiomyopathies",
-        "dilated cardiomyopathy",
-        "obstructive hypertrophic cardiomyopathy",
-        "alcoholic cardiomyopathy",
-        "cardiomyopathy in diseases classified elsewhere",
-        "cardiomyopathy due to drug and external agent",
-        "other restrictive cardiomyopathy",
-    ],
-    "pulmonary hypertension": [
-        "pulmonary hypertension, unspecified",
-        "other secondary pulmonary hypertension",
-        "pulmonary hypertension due to left heart disease",
-        "secondary pulmonary arterial hypertension",
-        "primary pulmonary hypertension",
-        "pulmonary hypertension due to lung diseases and hypoxia",
-    ],
-    "angina": [
-        "unstable angina",
-        "other forms of angina pectoris",
-        "angina pectoris, unspecified",
-        "angina pectoris with documented spasm",
-        "atherosclerotic heart disease of native coronary artery with unstable angina pectoris",
-        "atherosclerotic heart disease of native coronary artery with other forms of angina pectoris",
-        "atherosclerosis of autologous vein coronary artery bypass graft(s) with unstable angina pectoris",
-        "atherosclerosis of autologous vein coronary artery bypass graft(s) with other forms of angina pectoris",
-        "atherosclerotic heart disease of native coronary artery with angina pectoris with documented spasm",
-    ],
-    "bundle branch block": [
-        "left bundle-branch block, unspecified",
-        "unspecified right bundle-branch block",
-        "bifascicular block",
-        "left anterior fascicular block",
-    ],
-    "atrioventricular block": [
-        "atrioventricular block, complete",
-        "atrioventricular block, second degree",
-        "atrioventricular block, first degree",
-        "other atrioventricular block",
-        "other specified heart block",
-        "unspecified atrioventricular block",
-    ],
-    "arrhythmias": [
-        "ventricular tachycardia",
-        "ventricular fibrillation",
-        "ventricular premature depolarization",
-    ],
-    "pericardial disease": [
-        "pericardial effusion (noninflammatory)",
-        "acute pericarditis, unspecified",
-        "cardiac tamponade",
-        "infective pericarditis",
-        "disease of pericardium, unspecified",
-    ],
-    "coronary artery disease": [
-        "atherosclerotic heart disease of native coronary artery without angina pectoris",
-        "atherosclerotic heart disease of native coronary artery with unspecified angina pectoris",
-        "atherosclerotic heart disease of native coronary artery with angina pectoris with documented spasm",
-        "atherosclerotic heart disease of native coronary artery with unstable angina pectoris",
-        "coronary atherosclerosis due to calcified coronary lesion",
-        "atherosclerosis of autologous vein coronary artery bypass graft(s) with other forms of angina pectoris",
-    ],
-    "valvular disease": [
-        "nonrheumatic aortic (valve) stenosis",
-        "nonrheumatic mitral (valve) insufficiency",
-        "nonrheumatic mitral (valve) prolapse",
-        "nonrheumatic aortic (valve) insufficiency",
-        "nonrheumatic tricuspid (valve) insufficiency",
-        "other nonrheumatic aortic valve disorders",
-    ],
-    "conduction disorder": [
-        "other specified conduction disorders",
-        "conduction disorder, unspecified",
-        "pre-excitation syndrome",
-    ],
-    "cardiomegaly": [
-        "cardiomegaly",
-    ],
-    "other": [
-        "takotsubo syndrome",
-        "chronic pulmonary embolism",
-        "saddle embolus of pulmonary artery without acute cor pulmonale",
-        "other pulmonary embolism with acute cor pulmonale",
-        "other pulmonary embolism without acute cor pulmonale",
-        "pulmonary hypertension due to left heart disease",
-        "secondary pulmonary arterial hypertension",
-        "primary pulmonary hypertension",
-        "pulmonary hypertension due to lung diseases and hypoxia",
-        "cor pulmonale (chronic)",
-        "rupture of chordae tendineae, not elsewhere classified",
-        "intracardiac thrombosis, not elsewhere classified",
-        "endocarditis, valve unspecified",
-        "acute and subacute infective endocarditis",
-        "acute coronary thrombosis not resulting in myocardial infarction",
-        "cardiac arrest, cause unspecified",
-        "cardiac arrest due to underlying cardiac condition",
-        "cardiac arrest due to other underlying condition",
-    ],
-}
-
-canonical_map['heart failure'].extend([
-    "unspecified diastolic (congestive) heart failure",
-    "unspecified systolic (congestive) heart failure",
-    "acute on chronic combined systolic (congestive) and diastolic (congestive) heart failure",
-    "chronic right heart failure",
-    "acute right heart failure",
-    "other heart failure"
-])
-
-canonical_map['arrhythmias'].extend([
-    "supraventricular tachycardia",
-    "sick sinus syndrome",
-    "atrial premature depolarization",
-    "other specified cardiac arrhythmias",
-    "cardiac arrhythmia, unspecified",
-    "paroxysmal tachycardia, unspecified"
-])
-
-canonical_map['pericardial disease'].extend([
-    "acute nonspecific idiopathic pericarditis",
-    "chronic constrictive pericarditis",
-    "acute and subacute endocarditis, unspecified",
-    "other forms of acute pericarditis",
-    "acute pericarditis, unspecified",
-    "chronic adhesive pericarditis",
-    "hemopericardium, not elsewhere classified",
-    "cardiac tamponade",
-    "infective pericarditis",
-    "disease of pericardium, unspecified"
-])
-
-canonical_map['coronary artery disease'].extend([
-    "atherosclerosis of coronary artery bypass graft(s) without angina pectoris",
-    "atherosclerosis of autologous vein coronary artery bypass graft(s) with unspecified angina pectoris",
-    "atherosclerosis of autologous artery coronary artery bypass graft(s) with unstable angina pectoris"
-])
-
-canonical_map['myocardial infarction'].extend([
-    "st elevation (stemi) myocardial infarction involving other sites",
-    "st elevation (stemi) myocardial infarction involving left anterior descending coronary artery",
-    "st elevation (stemi) myocardial infarction involving left circumflex coronary artery",
-    "acute myocardial infarction, unspecified",
-    "other myocardial infarction type",
-    "thrombosis of atrium, auricular appendage, and ventricle as current complications following acute myocardial infarction"
-])
-
-canonical_map['angina'].extend([
-    "postinfarction angina"
-])
-
-canonical_map['valvular disease'].extend([
-    "nonrheumatic aortic (valve) stenosis with insufficiency",
-    "other nonrheumatic mitral valve disorders"
-])
-
-canonical_map['other'].extend([
-    "chronic ischemic heart disease, unspecified",
-    "aneurysm of heart",
-    "coronary artery dissection",
-    "other ill-defined heart diseases",
-])
-
-# Arrhythmias / conduction disorders
-canonical_map['arrhythmias'].extend([
-    "long qt syndrome",
-    "trifascicular block",
-    "other right bundle-branch block",
-    "junctional premature depolarization",
-    "re-entry ventricular arrhythmia",
-    "ventricular flutter",
-    "unspecified fascicular block",
-    "other premature depolarization"
-])
-
-# Cardiomyopathy / myocarditis
-canonical_map['cardiomyopathy'].extend([
-    "other hypertrophic cardiomyopathy",
-    "myocarditis, unspecified",
-    "isolated myocarditis",
-    "acute myocarditis, unspecified",
-    "other acute myocarditis"
-])
-
-# Heart failure / structural defects
-canonical_map['heart failure'].extend([
-    "right heart failure due to left heart failure",
-    "high output heart failure"
-])
-canonical_map['other'].extend([
-    "cardiac septal defect, acquired",
-    "ventricular septal defect as current complication following acute myocardial infarction"
-])
-
-# Pericardial disease
-canonical_map['pericardial disease'].extend([
-    "other specified diseases of pericardium",
-    "pericarditis in diseases classified elsewhere",
-    "dressler's syndrome",
-    "endocardial fibroelastosis"
-])
-
-# Valve disease
-canonical_map['valvular disease'].extend([
-    "nonrheumatic mitral (valve) stenosis",
-    "nonrheumatic pulmonary valve stenosis",
-    "nonrheumatic pulmonary valve insufficiency",
-    "nonrheumatic tricuspid (valve) stenosis",
-    "nonrheumatic aortic valve disorder, unspecified",
-    "other nonrheumatic pulmonary valve disorders",
-    "nonrheumatic aortic (valve) stenosis with insufficiency"
-])
-
-# Coronary artery / ischemic disease
-canonical_map['coronary artery disease'].extend([
-    "subsequent st elevation (stemi) myocardial infarction of inferior wall",
-    "st elevation (stemi) myocardial infarction involving left main coronary artery",
-    "subsequent st elevation (stemi) myocardial infarction of unspecified site",
-    "subsequent st elevation (stemi) myocardial infarction of anterior wall",
-    "coronary artery aneurysm",
-    "coronary atherosclerosis due to lipid rich plaque",
-    "atherosclerosis of coronary artery bypass graft(s), unspecified, with unstable angina pectoris",
-    "atherosclerosis of coronary artery bypass graft(s), unspecified, with unspecified angina pectoris",
-    "atherosclerosis of autologous artery coronary artery bypass graft(s) with unspecified angina pectoris",
-    "atherosclerosis of coronary artery bypass graft(s), unspecified, with other forms of angina pectoris",
-    "atherosclerosis of native coronary artery of transplanted heart without angina pectoris"
-])
-
-# Pulmonary vessels / pulmonary hypertension
-canonical_map['pulmonary hypertension'].extend([
-    "septic pulmonary embolism without acute cor pulmonale",
-    "saddle embolus of pulmonary artery with acute cor pulmonale",
-    "chronic thromboembolic pulmonary hypertension",
-    "arteriovenous fistula of pulmonary vessels",
-    "other diseases of pulmonary vessels"
-])
+def clean_icd_codes(codes):
+    if codes is None or (isinstance(codes, float) and np.isnan(codes)):
+        return None
+     # If it's already a list, use it
+    if isinstance(codes, list):
+        codes_list = codes
+    # If it's a string representation of a list, parse it
+    elif isinstance(codes, str) and codes.startswith("[") and codes.endswith("]"):
+        codes_list = ast.literal_eval(codes)
+        
+    return [normalize_icd(code) for code in codes_list]
 
 # -----------------------------
 # 6. Map phrases to canonical labels
 # -----------------------------
-def map_row_to_labels(phrases):
-    if not isinstance(phrases, list):
+def map_codes_to_labels(icd_codes):
+    """
+    Map ICD-10 codes to condition labels.
+    Returns 'unspecified_cardiac' only if code starts with 'I' and no labels are matched.
+    """
+    if not isinstance(icd_codes, list):
         return []
+    
     labels = []
-    phrases_lower = [p.lower() for p in phrases]
-    for label, variants in canonical_map.items():
-        if any(v in phrases_lower for v in variants):
-            labels.append(label)
+    has_cardiac_code = False
+    
+    # Convert codes to strings and strip whitespace
+    icd_codes_str = [str(code).strip() for code in icd_codes]
+    
+    # Check if any code starts with 'I' (cardiovascular ICD-10 codes)
+    has_cardiac_code = any(code.startswith('I') for code in icd_codes_str)
+    
+    for label, code_prefixes in icd_code_labels.items():
+        for icd_code in icd_codes_str:
+            # Check if any prefix matches the beginning of the ICD code
+            if any(icd_code.startswith(prefix) for prefix in code_prefixes):
+                labels.append(label)
+                break  # Found a match for this label, move to next label
+    
+    # Return 'unspecified_cardiac' only if has cardiac code but no labels matched
+    if not labels and has_cardiac_code:
+        return ["unspecified_cardiac"]
+    
     return labels
 
-def final_label_bucket(labels):
-    if not labels:
-        return ["other rare cardiac"]
-    return labels
+
+def onehot_labels(df, label_column='labels', prefix='label_'):
+    """
+    One-hot encode the labels column into separate binary columns.
+    Also creates summary columns for cardiovascular conditions.
+    """
+    import pandas as pd
+    
+    # Get all unique labels across all rows
+    all_labels = set()
+    for labels_list in df[label_column]:
+        if isinstance(labels_list, list):
+            all_labels.update(labels_list)
+    
+    # Sort labels for consistent column ordering
+    all_labels = sorted(all_labels)
+    
+    # Create one-hot encoded columns
+    onehot_data = {}
+    for label in all_labels:
+        onehot_data[f'{prefix}{label}'] = df[label_column].apply(
+            lambda x: 1 if isinstance(x, list) and label in x else 0
+        )
+    
+    # Add one-hot columns to original dataframe
+    onehot_df = pd.DataFrame(onehot_data, index=df.index)
+    result = pd.concat([df, onehot_df], axis=1)
+    
+    # Create is_cardiovascular column - 1 if has any CV label (including unspecified)
+    result['is_cardiovascular'] = result[label_column].apply(
+        lambda x: 1 if isinstance(x, list) and len(x) > 0 and 
+        any(label not in noncardiovascular_labels for label in x) else 0
+    )
+    
+    # Create is_specified_cardiac column - 1 if has specific cardiac diagnosis (not just unspecified)
+    result['is_specified_cardiac'] = result[label_column].apply(
+        lambda x: 1 if isinstance(x, list) and len(x) > 0 and 
+        any(label in cardiovascular_labels and label != 'unspecified_cardiac' for label in x) else 0
+    )
+    
+    return result
+
 
 # -----------------------------
 # 7. Main function
 # -----------------------------
-def run_entity_extraction(df: pd.DataFrame, out_path: str) -> pd.DataFrame:
+def run_entity_extraction(config_path):
     """
     Run full clinical entity extraction and save results.
     """
-    df = df.copy()
+    print("Running ICD Code Extraction...")
 
-    # Parse ICD lists
-    df['hosp_icd_codes_diagnosis_parsed'] = df['hosp_icd_codes_diagnosis'].apply(parse_icd_list)
-    df['ed_icd_codes_diagnosis_parsed'] = df['ed_icd_codes_diagnosis'].apply(parse_icd_list)
+    config = load_config(config_path)
 
-    # Filter heart ICD codes
-    df['hosp_heart_icd_codes'] = df['hosp_icd_codes_diagnosis_parsed'].apply(filter_heart_codes)
-    df['ed_heart_icd_codes'] = df['ed_icd_codes_diagnosis_parsed'].apply(filter_heart_codes)
+    clinical_encounter = load_clinical_data(config)
 
-    # Convert to descriptions
-    df['hosp_heart_descriptions'] = df['hosp_heart_icd_codes'].apply(icd_codes_to_descriptions)
-    df['ed_heart_descriptions'] = df['ed_heart_icd_codes'].apply(icd_codes_to_descriptions)
+    clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
 
-    # Map to canonical labels
-    df['canonical_labels'] = df['hosp_heart_descriptions'].apply(map_row_to_labels) + df['ed_heart_descriptions'].apply(map_row_to_labels)
-    df['canonical_labels'] = df['canonical_labels'].apply(final_label_bucket)
-    df['canonical_labels'] = df['canonical_labels'].apply(lambda x: list(set(x)))
+    print("[1/2] Extracting Cardiovascular labels from ICD codes...")
+    clinical_encounter['labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
 
-    # One-hot encode labels
-    for label in canonical_map.keys():
-        df[label] = df['canonical_labels'].apply(lambda x: int(label in x))
-    df = df.drop(columns=['canonical_labels'])
+    print("[2/2] One-Hot Encoding labels...")
+    clinical_encounter_extracted = onehot_labels(clinical_encounter)
 
-    # Cardiovascular flag
-    df["cardiovascular"] = df.apply(
-        lambda row: "cardiovascular" if row["hosp_heart_icd_codes"] or row["ed_heart_icd_codes"] else "not cardiovascular",
-        axis=1
-    )
+    print("-" * 60)
+    print(f"Final dataset shape: {clinical_encounter_extracted.shape}")
+    print(f"Number of columns: {len(clinical_encounter_extracted.columns)}")
+    out_path = Path(config["out_path"])
 
-    # Save output
-    df.to_csv(out_path, index=False)
-    print(f"Clinical entity extraction complete! Saved to {out_path}")
-    return df
+    print(f"Saving to {out_path}...")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    clinical_encounter_extracted.to_csv(out_path, index=False)
+    print("Clinical entity extraction complete!")
+    print("-" * 60)
+
+    return clinical_encounter_extracted

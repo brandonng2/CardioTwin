@@ -1,0 +1,9 @@
+{
+    "paths": {
+        "in_dir": "data/processed",
+        "out_dir": "data/processed/clinical_encounters.csv"
+    },
+    "sources": {
+        "clinical_encounters": "clinical_encounters.csv"
+    }
+}
