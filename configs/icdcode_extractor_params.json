@@ -1,7 +1,7 @@
 {
     "paths": {
-        "in_dir": "data/processed",
-        "out_dir": "data/processed/clinical_encounters.csv"
+        "in_dir": "data/processed/",
+        "out_dir": "data/processed/clinical_encounters_extracted.csv"
     },
     "sources": {
         "clinical_encounters": "clinical_encounters.csv"

@@ -13,9 +13,9 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         return json.load(f)
 
-def load_clinical_data(config):
+def load_clinical_data(in_dir, config):
     """Load clinical data from CSV files."""
-    in_dir = Path(config["in_dir"])
+    in_dir = Path(in_dir)
     s = config["sources"]
     clinical_encounters = pd.read_csv(in_dir / s["clinical_encounters"], dtype=str, low_memory=False)
     
@@ -121,7 +121,7 @@ def onehot_labels(df, label_column='labels', prefix='label_'):
 # -----------------------------
 # 7. Main function
 # -----------------------------
-def run_entity_extraction(config_path):
+def run_entity_extraction(in_dir, config_path, out_path):
     """
     Run full clinical entity extraction and save results.
     """
@@ -129,7 +129,7 @@ def run_entity_extraction(config_path):
 
     config = load_config(config_path)
 
-    clinical_encounter = load_clinical_data(config)
+    clinical_encounter = load_clinical_data(in_dir, config)
 
     clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
 
@@ -142,7 +142,6 @@ def run_entity_extraction(config_path):
     print("-" * 60)
     print(f"Final dataset shape: {clinical_encounter_extracted.shape}")
     print(f"Number of columns: {len(clinical_encounter_extracted.columns)}")
-    out_path = Path(config["out_path"])
 
     print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)

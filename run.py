@@ -63,7 +63,9 @@ def run_icd_extraction(args):
     print("=" * 60)
     
     icd_config_path = "configs/icdcode_extractor_params.json"
-    run_entity_extraction(icd_config_path)
+    in_dir = Path(icd_config_path["paths"]["in_dir"])
+    out_path = Path(icd_config_path["paths"]["out_dir"])
+    run_entity_extraction(in_dir, icd_config_path, out_path)
     print("✓ ICD code extraction completed")
     return 
 
