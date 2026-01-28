@@ -50,9 +50,14 @@ def run_vitals(args):
     print("\n" + "=" * 60)
     print("VITALS PREPROCESSING")
     print("=" * 60)
-    
+
+
     vitals_config_path = "configs/vitals_preprocessing_params.json"
-    run_vitals_preprocessing(vitals_config_path)
+    vitals_config = load_config(vitals_config_path)
+    in_dir = Path(vitals_config["paths"]["in_dir"])
+    out_path = Path(vitals_config["paths"]["out_dir"])
+    
+    run_vitals_preprocessing(in_dir, vitals_config_path, out_path)
     print("✓ Vitals preprocessing completed")
     return 
 
@@ -63,8 +68,10 @@ def run_icd_extraction(args):
     print("=" * 60)
     
     icd_config_path = "configs/icdcode_extractor_params.json"
-    in_dir = Path(icd_config_path["paths"]["in_dir"])
-    out_path = Path(icd_config_path["paths"]["out_dir"])
+    icd_config = load_config(icd_config_path)
+    in_dir = Path(icd_config["paths"]["in_dir"])
+    out_path = Path(icd_config["paths"]["out_dir"])
+    
     run_entity_extraction(in_dir, icd_config_path, out_path)
     print("✓ ICD code extraction completed")
     return 
@@ -110,11 +117,10 @@ def main():
     print("MIMIC-IV PREPROCESSING PIPELINE")
     print("=" * 60)
     
-    static_master_path = None
     
     # Static preprocessing
     if (run_all and not args.skip_static) or args.static:
-        static_master_path = run_static(args)
+        run_static(args)
     
     # ECG preprocessing
     if (run_all and not args.skip_ecg) or args.ecg:
@@ -126,7 +132,7 @@ def main():
     
     # Entity extraction
     if (run_all and not args.skip_entities) or args.entities:
-        run_entity_extraction(args, static_master_path)
+        run_icd_extraction(args)
     
     print("\n" + "=" * 60)
     print("ALL PREPROCESSING COMPLETED!")

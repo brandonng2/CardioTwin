@@ -1,3 +1,4 @@
+from logging import config
 import pandas as pd
 from pathlib import Path
 import json
@@ -13,9 +14,9 @@ def load_config(config_path):
 # -------------------------
 # Individual preprocessing functions
 # -------------------------
-def preprocess_omr(config):
+def preprocess_omr(in_dir, config):
     """Load and pivot OMR vitals."""
-    in_dir = Path(config["paths"]["in_dir"])
+    in_dir = Path(in_dir)
     omr_file = in_dir / config["sources"]["omr"]
     
     omr = pd.read_csv(omr_file)
@@ -60,11 +61,12 @@ def preprocess_omr(config):
     
     return omr_cleaned
 
-def preprocess_ed_vitals(config):
+def preprocess_ed_vitals(in_dir, config):
     """Load ED vitals and normalize chartdate."""
-    in_dir = Path(config["paths"]["in_dir"])
-    ed_file = in_dir / config["sources"]["ed_vitals"]
-    
+    in_dir = Path(in_dir)
+    s = config["sources"]
+    ed_file = in_dir / s["ed_vitals"]
+
     ed_vitals = pd.read_csv(ed_file)
     
     # Convert to datetime
@@ -84,10 +86,12 @@ def preprocess_ed_vitals(config):
     
     return ed_vitals
 
-def preprocess_lab_events(config):
+def preprocess_lab_events(in_dir, config):
     """Load lab events and pivot."""
-    in_dir = Path(config["paths"]["in_dir"])
-    lab_file = in_dir / config["sources"]["lab_events"]
+
+    in_dir = Path(in_dir)
+    s = config["sources"]
+    lab_file = in_dir / s["lab_events"]
     
     lab_events = pd.read_csv(lab_file)
     
@@ -152,7 +156,7 @@ def merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals):
 # -------------------------
 # Full pipeline runner
 # -------------------------
-def run_vitals_preprocessing(config_path):
+def run_vitals_preprocessing(in_dir, config_path, out_path):
     print("Running Vitals Preprocessing...")
     
     # Load config
@@ -160,22 +164,21 @@ def run_vitals_preprocessing(config_path):
     
     # Step 1: OMR
     print("[1/3] Processing OMR vitals...")
-    omr_cleaned = preprocess_omr(config)
+    omr_cleaned = preprocess_omr(in_dir, config)
     
     # Step 2: ED
     print("[2/3] Processing ED vitals...")
-    ed_vitals = preprocess_ed_vitals(config)
+    ed_vitals = preprocess_ed_vitals(in_dir, config)
     
     # Step 3: Lab Events
     print("[3/3] Processing Lab Events vitals...")
-    lab_events_vitals = preprocess_lab_events(config)
+    lab_events_vitals = preprocess_lab_events(in_dir, config)
     
     # Merge all
     print("[4/4] Merging all vitals...")
     final_vitals = merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals)
     
     # Save output
-    out_path = Path(config["paths"]["out_dir"])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final_vitals.to_csv(out_path, index=False)
     

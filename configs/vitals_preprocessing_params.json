@@ -6,6 +6,6 @@
     "sources": {
         "omr": "omr_vitals.csv",
         "ed_vitals": "ed_vitals.csv",
-        "lab_events": "lab_events_vitals.csv"
+        "lab_events": "labevents_vitals.csv"
     }
 }
