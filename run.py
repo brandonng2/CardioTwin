@@ -1,13 +1,11 @@
 import json
-import sys
 import argparse
 from pathlib import Path
-import pandas as pd
+from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
 from src.preprocessing.icd_entity_extraction import run_entity_extraction
-
 
 
 def load_config(config_path):
@@ -22,13 +20,12 @@ def run_static(args):
     print("STATIC PREPROCESSING")
     print("=" * 60)
     
-    static_config = load_config("configs/static_preprocessing_params.json")
-    in_dir = Path(static_config["paths"]["in_dir"])
-    out_path = Path(static_config["paths"]["out_dir"])
+    config = load_config("configs/static_preprocessing_params.json")
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
     
     run_static_preprocessing(in_dir, "configs/static_preprocessing_params.json", out_path)
-    print("✓ Static preprocessing completed")
-    return out_path
+    print("Static preprocessing completed")
 
 
 def run_ecg(args):
@@ -37,13 +34,13 @@ def run_ecg(args):
     print("ECG PREPROCESSING")
     print("=" * 60)
     
-    ecg_config = load_config("configs/ecg_preprocessing_params.json")
-    in_dir = Path(ecg_config["paths"]["in_dir"])
-    out_path = Path(ecg_config["paths"]["out_dir"])
+    config = load_config("configs/ecg_preprocessing_params.json")
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
     
     run_ecg_preprocessing(in_dir, "configs/ecg_preprocessing_params.json", out_path)
-    print("✓ ECG preprocessing completed")
-    return 
+    print("ECG preprocessing completed")
+
 
 def run_vitals(args):
     """Run vitals preprocessing."""
@@ -51,15 +48,14 @@ def run_vitals(args):
     print("VITALS PREPROCESSING")
     print("=" * 60)
 
-
-    vitals_config_path = "configs/vitals_preprocessing_params.json"
-    vitals_config = load_config(vitals_config_path)
-    in_dir = Path(vitals_config["paths"]["in_dir"])
-    out_path = Path(vitals_config["paths"]["out_dir"])
+    config_path = "configs/vitals_preprocessing_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
     
-    run_vitals_preprocessing(in_dir, vitals_config_path, out_path)
-    print("✓ Vitals preprocessing completed")
-    return 
+    run_vitals_preprocessing(in_dir, config_path, out_path)
+    print("Vitals preprocessing completed")
+
 
 def run_icd_extraction(args):
     """Run clinical entity extraction."""
@@ -67,14 +63,27 @@ def run_icd_extraction(args):
     print("ENTITY EXTRACTION")
     print("=" * 60)
     
-    icd_config_path = "configs/icdcode_extractor_params.json"
-    icd_config = load_config(icd_config_path)
-    in_dir = Path(icd_config["paths"]["in_dir"])
-    out_path = Path(icd_config["paths"]["out_dir"])
+    config_path = "configs/icdcode_extractor_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
     
-    run_entity_extraction(in_dir, icd_config_path, out_path)
-    print("✓ ICD code extraction completed")
-    return 
+    run_entity_extraction(in_dir, config_path, out_path)
+    print("ICD code extraction completed")
+
+
+def run_xgboost_baseline(args):
+    """Run XGBoost baseline model."""
+    print("\n" + "=" * 60)
+    print("XGBOOST BASELINE MODEL")
+    print("=" * 60)
+    
+    config_path = "configs/xgboost_baseline_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_xgboost_baseline_pipeline(in_dir, config_path, out_path)
 
 
 def main():
@@ -82,7 +91,7 @@ def main():
         description="Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-  Examples:
+Examples:
   # Run everything
   python run.py --all
   
@@ -100,23 +109,24 @@ def main():
     parser.add_argument("--static", action="store_true", help="Run static preprocessing")
     parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
-    parser.add_argument("--entities", action="store_true", help="Run entity extraction")  
+    parser.add_argument("--entities", action="store_true", help="Run entity extraction")
+    parser.add_argument("--xgbaseline", action="store_true", help="Run XGBoost baseline model")
     
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
     parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
-    parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")  
+    parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
-        
+    parser.add_argument("--skip-xgbaseline", action="store_true", help="Skip XGBoost baseline model")
+
     args = parser.parse_args()
     
     # Determine what to run
-    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities])
+    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities, args.xgbaseline])
     
     print("=" * 60)
     print("MIMIC-IV PREPROCESSING PIPELINE")
     print("=" * 60)
-    
     
     # Static preprocessing
     if (run_all and not args.skip_static) or args.static:
@@ -137,6 +147,10 @@ def main():
     print("\n" + "=" * 60)
     print("ALL PREPROCESSING COMPLETED!")
     print("=" * 60)
+
+    # XGBoost Baseline Model
+    if (run_all and not args.skip_xgbaseline) or args.xgbaseline:
+        run_xgboost_baseline(args)
 
 
 if __name__ == "__main__":

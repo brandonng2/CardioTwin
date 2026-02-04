@@ -1,11 +1,11 @@
 {
     "paths": {
         "in_dir": "data/processed/",
-        "out_dir": "data/model/"
+        "out_dir": "data/model_results/"
     },
     "sources": {
         "clinical_encounters": "clinical_encounters_extracted.csv",
         "vitals": "ed_vitals.csv",
-        "ecg": "ecg_data.csv"
+        "ecg_records": "ecg_data.csv"
     }
 }
