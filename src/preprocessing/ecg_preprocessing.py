@@ -99,7 +99,7 @@ def clean_report_text(s):
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
-def apply_phrase_labels(df, column_name='full_report'):
+def apply_phrase_labels(df):
     """
     Apply binary labels to dataframe based on pattern matching.
     """
@@ -107,9 +107,9 @@ def apply_phrase_labels(df, column_name='full_report'):
         """Check if text contains any of the phrases."""
         return any(p in text for p in phrases)
 
-    # Create all label columns at once using a dictionary
+    # Create all label columns at once using a dictionary with 'report_' prefix
     label_columns = {
-        label: df[column_name].apply(lambda x: contains_any(x, phrases)).astype(int)
+        f'report_{label}': df['full_report'].apply(lambda x: contains_any(x, phrases)).astype(int)
         for label, phrases in report_label_map.items()
     }
     
