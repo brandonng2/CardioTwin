@@ -4,12 +4,16 @@ import pandas as pd
 import numpy as np
 import re
 import ast
+import sys
+from tqdm import tqdm
 from .machine_measurements_labels import report_label_map
+
 
 def load_config(config_path):
     """Load preprocessing configuration from JSON file."""
     with open(config_path, "r") as f:
         return json.load(f)
+
 
 def load_ecg_data(raw_dir, processed_dir, config):
     """Load ECG data from CSV files."""
@@ -22,6 +26,7 @@ def load_ecg_data(raw_dir, processed_dir, config):
     clinical_encounters = pd.read_csv(processed_dir / s["clinical_encounters"], dtype=str, low_memory=False)
     
     return ecg_record, machine_measurements, clinical_encounters
+
 
 def clean_cols_types(df):
     """
@@ -44,6 +49,7 @@ def clean_cols_types(df):
 
     return df
 
+
 def flatten_columns(df, cols, output_col="flattened"):
     """
     Combine multiple report columns into one list column.
@@ -54,6 +60,7 @@ def flatten_columns(df, cols, output_col="flattened"):
         for row in df[cols].to_numpy()
     ]
     return df.drop(columns=cols)
+
 
 def preprocess_ecg_reports(df):
     """
@@ -82,9 +89,6 @@ def preprocess_ecg_reports(df):
 
     return df
 
-# -------------------------
-# Label extraction
-# -------------------------
 
 def clean_report_text(s):
     """
@@ -99,15 +103,14 @@ def clean_report_text(s):
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
+
 def apply_phrase_labels(df):
-    """
-    Apply binary labels to dataframe based on pattern matching.
-    """
+    """Apply binary labels to dataframe based on pattern matching."""
     def contains_any(text, phrases):
         """Check if text contains any of the phrases."""
         return any(p in text for p in phrases)
 
-    # Create all label columns at once using a dictionary with 'report_' prefix
+    # Create all label columns at once
     label_columns = {
         f'report_{label}': df['full_report'].apply(lambda x: contains_any(x, phrases)).astype(int)
         for label, phrases in report_label_map.items()
@@ -119,13 +122,9 @@ def apply_phrase_labels(df):
     
     return df
 
-# -------------------------
-# ECG Record List
-# -------------------------
+
 def match_ecg_to_encounters(ecg_record_list_df, encounter_df):
-    """
-    Match ECG records to hospital/ED encounters based on time windows.
-    """
+    """Match ECG records to hospital/ED encounters based on time windows."""
     # Create copies to avoid modifying original dataframes
     ecg_df = ecg_record_list_df.copy()
     enc_df = encounter_df.copy()
@@ -139,7 +138,7 @@ def match_ecg_to_encounters(ecg_record_list_df, encounter_df):
     
     # Define columns to keep from encounter data
     encounter_time_cols = ['hadm_id', "hosp_admittime", "hosp_dischtime", 
-                           "ed_intime", "ed_outtime",  'ed_stay_id', 
+                           "ed_intime", "ed_outtime", 'ed_stay_id', 
                            'icu_stay_id', 'icu_intime', 'icu_outtime']
     
     all_columns = list(ecg_df.columns) + encounter_time_cols
@@ -179,7 +178,6 @@ def match_ecg_to_encounters(ecg_record_list_df, encounter_df):
     )
     
     # For each study_id, keep only the row with the smallest window
-    # (most specific encounter match)
     merged = (
         merged.sort_values(["study_id", "window_size"])
               .drop_duplicates("study_id", keep="first")
@@ -187,6 +185,7 @@ def match_ecg_to_encounters(ecg_record_list_df, encounter_df):
     )
     
     return merged
+
 
 def add_icu_indicator(merged_df):
     """
@@ -199,7 +198,6 @@ def add_icu_indicator(merged_df):
     
     def parse_timestamp_list(ts_value):
         """Parse timestamp value into list of datetimes"""
-        # Check type first before pd.isna
         if isinstance(ts_value, list):
             return [pd.to_datetime(t) for t in ts_value if pd.notna(t)]
         
@@ -267,39 +265,71 @@ def add_icu_indicator(merged_df):
     
     return df
 
-# -------------------------
-# Pipeline runner
-# -------------------------
 
 def run_ecg_preprocessing(in_dir, config_path, out_path):
-    print("Running ECG preprocessing...")
+    """Main ECG preprocessing pipeline."""
+    steps = [
+        "Loading configuration",
+        "Loading raw data",
+        "Preprocessing machine measurements",
+        "Applying phrase labels",
+        "Matching ECG to encounters",
+        "Adding ICU indicators",
+        "Creating final dataset"
+    ]
     
-    print("\n[1/5] Loading configuration...")
-    config = load_config(config_path)
+    print("Running ECG preprocessing...")
+    print()
+    
+    pbar = tqdm(total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
+    
+    try:
+        pbar.set_description(f"[1/7] {steps[0]}")
+        config = load_config(config_path)
+        pbar.update(1)
 
-    print("[2/5] Loading raw data...")
-    processed_dir = Path(config["paths"]["processed_dir"])
-    ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, processed_dir, config)
+        pbar.set_description(f"[2/7] {steps[1]}")
+        processed_dir = Path(config["paths"]["processed_dir"])
+        ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, processed_dir, config)
+        pbar.update(1)
 
-    print("[3/5] Preprocessing machine measurements...")
-    cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
-    final_machine_measurements = apply_phrase_labels(cleaned_machine_measurements)
+        pbar.set_description(f"[3/7] {steps[2]}")
+        cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
+        pbar.update(1)
+        
+        pbar.set_description(f"[4/7] {steps[3]}")
+        final_machine_measurements = apply_phrase_labels(cleaned_machine_measurements)
+        pbar.update(1)
 
-    print("[4/5] Preprocessing ECG records...")
-    merged = match_ecg_to_encounters(ecg_record, clinical_encounters)
-    final_ecg_record_list = add_icu_indicator(merged)
+        pbar.set_description(f"[5/7] {steps[4]}")
+        merged = match_ecg_to_encounters(ecg_record, clinical_encounters)
+        pbar.update(1)
+        
+        pbar.set_description(f"[6/7] {steps[5]}")
+        final_ecg_record_list = add_icu_indicator(merged)
+        pbar.update(1)
 
-    print("[5/5] Creating ECG dataset...")
-    master_ecg = final_ecg_record_list.merge(final_machine_measurements, on=['subject_id', 'study_id', 'ecg_time'], how='inner')
+        pbar.set_description(f"[7/7] {steps[6]}")
+        master_ecg = final_ecg_record_list.merge(
+            final_machine_measurements, 
+            on=['subject_id', 'study_id', 'ecg_time'], 
+            how='inner'
+        )
+        pbar.update(1)
+        
+    finally:
+        pbar.close()
 
+    print()
     print("-" * 60)
     print(f"Final dataset shape: {master_ecg.shape}")
     print(f"Number of columns: {len(master_ecg.columns)}")
-    print(f'Hours of ECG data: {master_ecg.shape[0] * 10 / 60 / 60}')
+    print(f"Hours of ECG data: {master_ecg.shape[0] * 10 / 60 / 60:.2f}")
     print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     master_ecg.to_csv(out_path, index=False)
-    print("ECG preprocessing complete!")
+    print("✓ ECG preprocessing complete!")
     print("-" * 60)
 
     return master_ecg

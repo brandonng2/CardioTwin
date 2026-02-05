@@ -25,7 +25,7 @@ def run_static(args):
     out_path = Path(config["paths"]["out_dir"])
     
     run_static_preprocessing(in_dir, "configs/static_preprocessing_params.json", out_path)
-    print("Static preprocessing completed")
+    print("✓ Static preprocessing completed")
 
 
 def run_ecg(args):
@@ -39,7 +39,7 @@ def run_ecg(args):
     out_path = Path(config["paths"]["out_dir"])
     
     run_ecg_preprocessing(in_dir, "configs/ecg_preprocessing_params.json", out_path)
-    print("ECG preprocessing completed")
+    print("✓ ECG preprocessing completed")
 
 
 def run_vitals(args):
@@ -54,7 +54,7 @@ def run_vitals(args):
     out_path = Path(config["paths"]["out_dir"])
     
     run_vitals_preprocessing(in_dir, config_path, out_path)
-    print("Vitals preprocessing completed")
+    print("✓ Vitals preprocessing completed")
 
 
 def run_icd_extraction(args):
@@ -69,7 +69,7 @@ def run_icd_extraction(args):
     out_path = Path(config["paths"]["out_dir"])
     
     run_entity_extraction(in_dir, config_path, out_path)
-    print("ICD code extraction completed")
+    print("✓ ICD code extraction completed")
 
 
 def run_xgboost_baseline(args):
@@ -82,8 +82,23 @@ def run_xgboost_baseline(args):
     config = load_config(config_path)
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
+    
+    # Determine target_type from command-line argument
+    target_type = None
+    if hasattr(args, 'xgb_target') and args.xgb_target and args.xgb_target != 'default':
+        # Map friendly names to internal values
+        target_mapping = {
+            'diagnosis': 'labels',
+            'label': 'labels',
+            'labels': 'labels',
+            'report': 'reports',
+            'reports': 'reports'
+        }
+        target_type = target_mapping.get(args.xgb_target.lower())
+        if target_type is None:
+            print(f"Warning: Invalid target type '{args.xgb_target}'. Using config default.")
 
-    run_xgboost_baseline_pipeline(in_dir, config_path, out_path)
+    run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 
 def main():
@@ -101,6 +116,11 @@ Examples:
   
   # Run everything except certain steps
   python run.py --all --skip-static
+  
+  # Run XGBoost with specific target
+  python run.py --xgbaseline label      # Predict diagnosis labels (default)
+  python run.py --xgbaseline report     # Predict ECG reports
+  python run.py --xgbaseline            # Use config default
         """
     )
     
@@ -110,7 +130,8 @@ Examples:
     parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
-    parser.add_argument("--xgbaseline", action="store_true", help="Run XGBoost baseline model")
+    parser.add_argument("--xgbaseline", nargs='?', const='default', dest='xgb_target',
+                       help="Run XGBoost baseline model. Optional: 'label' (default) or 'report'")
     
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
@@ -122,7 +143,7 @@ Examples:
     args = parser.parse_args()
     
     # Determine what to run
-    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities, args.xgbaseline])
+    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities, args.xgb_target])
     
     print("=" * 60)
     print("MIMIC-IV PREPROCESSING PIPELINE")
@@ -145,11 +166,11 @@ Examples:
         run_icd_extraction(args)
     
     print("\n" + "=" * 60)
-    print("ALL PREPROCESSING COMPLETED!")
+    print("✓ ALL PREPROCESSING COMPLETED!")
     print("=" * 60)
 
     # XGBoost Baseline Model
-    if (run_all and not args.skip_xgbaseline) or args.xgbaseline:
+    if (run_all and not args.skip_xgbaseline) or args.xgb_target:
         run_xgboost_baseline(args)
 
 

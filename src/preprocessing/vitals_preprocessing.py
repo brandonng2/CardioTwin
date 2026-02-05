@@ -1,19 +1,16 @@
-from logging import config
 import pandas as pd
 from pathlib import Path
 import json
+import sys
+from tqdm import tqdm
 
-# -------------------------
-# Config loader
-# -------------------------
+
 def load_config(config_path):
     """Load JSON configuration."""
     with open(config_path, "r") as f:
         return json.load(f)
 
-# -------------------------
-# Individual preprocessing functions
-# -------------------------
+
 def preprocess_omr(in_dir, config):
     """Load and pivot OMR vitals."""
     in_dir = Path(in_dir)
@@ -61,6 +58,7 @@ def preprocess_omr(in_dir, config):
     
     return omr_cleaned
 
+
 def preprocess_ed_vitals(in_dir, config):
     """Load ED vitals and normalize chartdate."""
     in_dir = Path(in_dir)
@@ -86,9 +84,9 @@ def preprocess_ed_vitals(in_dir, config):
     
     return ed_vitals
 
+
 def preprocess_lab_events(in_dir, config):
     """Load lab events and pivot."""
-
     in_dir = Path(in_dir)
     s = config["sources"]
     lab_file = in_dir / s["lab_events"]
@@ -128,9 +126,7 @@ def preprocess_lab_events(in_dir, config):
     
     return lab_events_vitals
 
-# -------------------------
-# Merge all vitals
-# -------------------------
+
 def merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals):
     """Merge OMR, ED vitals, and lab events preserving all OMR patient/days."""
     
@@ -153,37 +149,51 @@ def merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals):
     
     return final
 
-# -------------------------
-# Full pipeline runner
-# -------------------------
+
 def run_vitals_preprocessing(in_dir, config_path, out_path):
+    """Main vitals preprocessing pipeline."""
+    steps = [
+        "Loading configuration",
+        "Processing OMR vitals",
+        "Processing ED vitals",
+        "Processing Lab Events vitals",
+        "Merging all vitals"
+    ]
+    
     print("Running Vitals Preprocessing...")
+    print()
     
-    # Load config
-    config = load_config(config_path)
+    pbar = tqdm(total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
-    # Step 1: OMR
-    print("[1/3] Processing OMR vitals...")
-    omr_cleaned = preprocess_omr(in_dir, config)
+    try:
+        pbar.set_description(f"[1/5] {steps[0]}")
+        config = load_config(config_path)
+        pbar.update(1)
+        
+        pbar.set_description(f"[2/5] {steps[1]}")
+        omr_cleaned = preprocess_omr(in_dir, config)
+        pbar.update(1)
+        
+        pbar.set_description(f"[3/5] {steps[2]}")
+        ed_vitals = preprocess_ed_vitals(in_dir, config)
+        pbar.update(1)
+        
+        pbar.set_description(f"[4/5] {steps[3]}")
+        lab_events_vitals = preprocess_lab_events(in_dir, config)
+        pbar.update(1)
+        
+        pbar.set_description(f"[5/5] {steps[4]}")
+        final_vitals = merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals)
+        pbar.update(1)
+        
+    finally:
+        pbar.close()
     
-    # Step 2: ED
-    print("[2/3] Processing ED vitals...")
-    ed_vitals = preprocess_ed_vitals(in_dir, config)
-    
-    # Step 3: Lab Events
-    print("[3/3] Processing Lab Events vitals...")
-    lab_events_vitals = preprocess_lab_events(in_dir, config)
-    
-    # Merge all
-    print("[4/4] Merging all vitals...")
-    final_vitals = merge_vitals(omr_cleaned, ed_vitals, lab_events_vitals)
-    
-    # Save output
+    print()
+    print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final_vitals.to_csv(out_path, index=False)
-    
     print(f"✓ Vitals preprocessing completed. Saved to {out_path}")
     
     return final_vitals
-
-    

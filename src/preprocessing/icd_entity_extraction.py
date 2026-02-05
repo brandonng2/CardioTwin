@@ -3,15 +3,16 @@ from pathlib import Path
 import pandas as pd
 import ast
 import numpy as np
-from .icd_code_labels import icd_code_labels
-from .icd_code_labels import noncardiovascular_labels
-from .icd_code_labels import cardiovascular_labels
+import sys
+from tqdm import tqdm
+from .icd_code_labels import icd_code_labels, noncardiovascular_labels, cardiovascular_labels
 
 
 def load_config(config_path):
     """Load preprocessing configuration from JSON file."""
     with open(config_path, "r") as f:
         return json.load(f)
+
 
 def load_clinical_data(in_dir, config):
     """Load clinical data from CSV files."""
@@ -23,6 +24,7 @@ def load_clinical_data(in_dir, config):
 
 
 def normalize_icd(code):
+    """Normalize ICD code format."""
     if code is None:
         return None
     code = str(code)
@@ -30,21 +32,24 @@ def normalize_icd(code):
         return code[:3] + "." + code[3:]
     return code
 
+
 def clean_icd_codes(codes):
+    """Clean and normalize ICD codes from various formats."""
     if codes is None or (isinstance(codes, float) and np.isnan(codes)):
         return None
-     # If it's already a list, use it
+    
+    # If it's already a list, use it
     if isinstance(codes, list):
         codes_list = codes
     # If it's a string representation of a list, parse it
     elif isinstance(codes, str) and codes.startswith("[") and codes.endswith("]"):
         codes_list = ast.literal_eval(codes)
+    else:
+        return None
         
     return [normalize_icd(code) for code in codes_list]
 
-# -----------------------------
-# 6. Map phrases to canonical labels
-# -----------------------------
+
 def map_codes_to_labels(icd_codes):
     """
     Map ICD-10 codes to condition labels.
@@ -81,8 +86,6 @@ def onehot_labels(df, label_column='labels', prefix='label_'):
     One-hot encode the labels column into separate binary columns.
     Also creates summary columns for cardiovascular conditions.
     """
-    import pandas as pd
-    
     # Get all unique labels across all rows
     all_labels = set()
     for labels_list in df[label_column]:
@@ -118,35 +121,54 @@ def onehot_labels(df, label_column='labels', prefix='label_'):
     return result
 
 
-# -----------------------------
-# 7. Main function
-# -----------------------------
 def run_entity_extraction(in_dir, config_path, out_path):
-    """
-    Run full clinical entity extraction and save results.
-    """
+    """Run full clinical entity extraction and save results."""
+    steps = [
+        "Loading configuration",
+        "Loading clinical data",
+        "Cleaning ICD codes",
+        "Extracting cardiovascular labels",
+        "One-hot encoding labels"
+    ]
+    
     print("Running ICD Code Extraction...")
+    print()
+    
+    pbar = tqdm(total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
+    
+    try:
+        pbar.set_description(f"[1/5] {steps[0]}")
+        config = load_config(config_path)
+        pbar.update(1)
 
-    config = load_config(config_path)
+        pbar.set_description(f"[2/5] {steps[1]}")
+        clinical_encounter = load_clinical_data(in_dir, config)
+        pbar.update(1)
 
-    clinical_encounter = load_clinical_data(in_dir, config)
+        pbar.set_description(f"[3/5] {steps[2]}")
+        clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
+        pbar.update(1)
 
-    clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
+        pbar.set_description(f"[4/5] {steps[3]}")
+        clinical_encounter['labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
+        pbar.update(1)
 
-    print("[1/2] Extracting Cardiovascular labels from ICD codes...")
-    clinical_encounter['labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
+        pbar.set_description(f"[5/5] {steps[4]}")
+        clinical_encounter_extracted = onehot_labels(clinical_encounter)
+        pbar.update(1)
+        
+    finally:
+        pbar.close()
 
-    print("[2/2] One-Hot Encoding labels...")
-    clinical_encounter_extracted = onehot_labels(clinical_encounter)
-
+    print()
     print("-" * 60)
     print(f"Final dataset shape: {clinical_encounter_extracted.shape}")
     print(f"Number of columns: {len(clinical_encounter_extracted.columns)}")
-
     print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     clinical_encounter_extracted.to_csv(out_path, index=False)
-    print("Clinical entity extraction complete!")
+    print("✓ Clinical entity extraction complete!")
     print("-" * 60)
 
     return clinical_encounter_extracted
