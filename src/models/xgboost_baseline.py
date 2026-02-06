@@ -553,6 +553,81 @@ def evaluate_and_visualize_multilabel_model(multi_xgb, X_test, y_test, y_feature
     plt.close()  # Close the figure to prevent display
     print(f"Plots saved to '{plot_path}'")
     
+    # --- Create separate label-by-label prediction confusion matrix ---
+    n_labels = len(valid_labels)
+    
+    # Create a matrix: rows = actual labels, columns = predicted labels
+    # This shows co-occurrence of predictions
+    label_confusion_matrix = np.zeros((n_labels, n_labels))
+    
+    # Get predictions for all labels
+    y_pred_all_labels = np.zeros((len(X_test), n_labels))
+    for idx, label in enumerate(valid_labels):
+        label_idx = list(y_features).index(label)
+        y_pred_all_labels[:, idx] = multi_xgb.estimators_[label_idx].predict(X_test)
+    
+    # Fill confusion matrix: when label i is true, how often is label j predicted?
+    for i, true_label in enumerate(valid_labels):
+        true_label_idx = list(y_features).index(true_label)
+        y_true_i = y_test[true_label].values
+        
+        # For samples where this label is positive
+        positive_mask = y_true_i == 1
+        
+        if positive_mask.sum() > 0:
+            for j in range(n_labels):
+                # Count how many times label j is predicted when label i is true
+                label_confusion_matrix[i, j] = y_pred_all_labels[positive_mask, j].sum()
+    
+    # Create figure for label-by-label confusion
+    fig, ax = plt.subplots(figsize=(max(12, n_labels * 0.6), max(10, n_labels * 0.5)))
+    
+    # Create heatmap
+    im = ax.imshow(label_confusion_matrix, cmap='Greens', aspect='auto')
+    
+    # Shorten label names (remove prefix)
+    shortened_labels = []
+    for label in valid_labels:
+        if label.startswith('label_'):
+            shortened_labels.append(label.replace('label_', ''))
+        elif label.startswith('report_'):
+            shortened_labels.append(label.replace('report_', ''))
+        else:
+            shortened_labels.append(label)
+    
+    # Set ticks and labels
+    ax.set_xticks(np.arange(n_labels))
+    ax.set_yticks(np.arange(n_labels))
+    ax.set_xticklabels(shortened_labels, rotation=90, ha='right', fontsize=9)
+    ax.set_yticklabels(shortened_labels, fontsize=9)
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Prediction Count', rotation=270, labelpad=20, fontsize=11)
+    
+    # Add text annotations (only if not too many labels)
+    if n_labels <= 30:
+        for i in range(n_labels):
+            for j in range(n_labels):
+                count = int(label_confusion_matrix[i, j])
+                if count > 0:  # Only show non-zero values
+                    text_color = "white" if label_confusion_matrix[i, j] > label_confusion_matrix.max() / 2 else "black"
+                    text = ax.text(j, i, f'{count}',
+                                  ha="center", va="center", color=text_color, fontsize=7)
+    
+    ax.set_title(f'Label Co-occurrence Matrix\n{label_group_name}\n(When true label on Y-axis is positive, how often is predicted label on X-axis positive?)', 
+                 fontsize=13, pad=20)
+    ax.set_xlabel('Predicted Label', fontsize=12)
+    ax.set_ylabel('True Label', fontsize=12)
+    
+    plt.tight_layout()
+    
+    # Save the label-by-label confusion matrix
+    label_cm_path = Path(out_path) / f'xgboost_baseline_{output_prefix}_label_confusion_matrix.png'
+    plt.savefig(label_cm_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Label co-occurrence matrix saved to '{label_cm_path}'")
+    
     # Also calculate from confusion matrix for verification
     tn, fp, fn, tp = total_cm.ravel()
     
