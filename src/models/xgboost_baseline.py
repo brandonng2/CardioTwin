@@ -303,34 +303,38 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
             y_features: List of target column names
             output_prefix: Prefix for output files
     """
+    model_df_encoded = pd.get_dummies(model_df, columns=['race', 'gender'], drop_first=True)
+
     # Get machine measurement columns
     machine_cols = [col for col in ed_ecg_records.columns if col.startswith('report_')]
     
     # Get vital sign features
-    vital_features = [col for col in model_df.columns if any(
+    vital_features = [col for col in model_df_encoded.columns if any(
         keyword in col for keyword in ['_mean', '_std', '_min', '_max', '_closest', 'vitals_time_before_ecg']
     )]
     
     # Get label columns
-    label_cols = [col for col in model_df.columns if col.startswith('label_')]
-    
+    label_cols = [col for col in model_df_encoded.columns if col.startswith('label_')]
+
+    demo_features = ['anchor_age'] + [c for c in model_df_encoded.columns if c.startswith(('race_', 'gender_'))]
+
     # Determine features and targets based on target_type
     if target_type == 'labels':
-        # Predict labels using machine reports + vitals as features
-        X_features = machine_cols + vital_features
+        # Predict labels using machine reports + vital + demo as features
+        X_features = machine_cols + vital_features + demo_features
         y_features = label_cols
         output_prefix = 'diagnosis'
     elif target_type == 'reports':
-        # Predict machine reports using vitals + labels as features
-        X_features = vital_features
+        # Predict machine reports using vitals + demo as features
+        X_features = vital_features + demo_features
         y_features = machine_cols
         output_prefix = 'ecg_report'
     else:
         raise ValueError(f"target_type must be 'labels' or 'reports', got '{target_type}'")
     
     # Create feature and target matrices
-    X = model_df[X_features].copy()
-    y = model_df[y_features].copy()
+    X = model_df_encoded[X_features].copy()
+    y = model_df_encoded[y_features].copy()
     
     # Convert to numeric
     X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
@@ -648,6 +652,9 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         pbar.update(1)
         
         pbar.set_description(f"[9/9] {steps[8]}")
+        pbar.update(1)
+        pbar.close()  # Close progress bar before evaluation prints output
+        
         # Determine label group name based on target type
         if target_type == 'labels':
             label_group_name = 'Diagnosis Labels'
@@ -659,10 +666,10 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         results_df = evaluate_and_visualize_multilabel_model(
             multi_xgb, X_test, y_test, y_features, output_prefix, out_path=out_path, label_group_name=label_group_name
         )
-        pbar.update(1)
         
-    finally:
+    except Exception as e:
         pbar.close()
+        raise e
     
     print()
     target_name = "diagnosis labels" if target_type == 'labels' else "ECG machine reports"
