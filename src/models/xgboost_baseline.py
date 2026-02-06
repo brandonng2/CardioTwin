@@ -322,7 +322,7 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
         output_prefix = 'diagnosis'
     elif target_type == 'reports':
         # Predict machine reports using vitals + labels as features
-        X_features = vital_features + label_cols
+        X_features = vital_features
         y_features = machine_cols
         output_prefix = 'ecg_report'
     else:

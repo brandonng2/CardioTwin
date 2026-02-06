@@ -1,7 +1,6 @@
 # ClinicalDigitalTwin
 
-A clean, modular pipeline for preprocessing MIMIC-IV data (Hospital, ICU, ED, and ECG) for clinical digital twin modeling.  
-**Note:** Model creation is still in progress.
+A clean, modular pipeline for preprocessing MIMIC-IV data (Hospital, ICU, ED, and ECG) for clinical digital twin modeling, with baseline XGBoost models for multi-label prediction of cardiovascular diagnoses and ECG findings.
 
 ## Project Overview
 
@@ -11,7 +10,15 @@ This repository provides an end-to-end framework for preparing integrated MIMIC-
 - **MIMIC-IV-ED:** Emergency department visits, diagnoses, and vitals
 - **MIMIC-IV-ECG:** Electrocardiogram recordings and measurements
 
-The pipeline supports both static (column-based) and temporal (row-based) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular or cardiovascular-related diagnoses.**
+The pipeline supports both static (EHR demographic) and temporal (vitals and ECG) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular or cardiovascular-related diagnoses.**
+
+### Baseline Models
+
+The repository includes XGBoost multi-label classifiers that serve as baseline models for:
+- **Diagnosis Prediction:** Predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features
+- **ECG Finding Prediction:** Predicting ECG machine-reported findings from vital signs and demographic features
+
+These baselines establish performance benchmarks for more sophisticated deep learning models.
 
 ## Project Structure
 ```
@@ -20,24 +27,29 @@ The pipeline supports both static (column-based) and temporal (row-based) prepro
 │   ├── static_preprocessing.json      # Configuration for static/column-based CSV preprocessing
 │   ├── ecg_preprocessing.json         # Configuration for ECG signal preprocessing
 │   ├── icdcode_extractor.json         # Configuration for ICD code extraction and labeling
-│   └── vitals_preprocessing.json      # Configuration for vital signs preprocessing
+│   ├── vitals_preprocessing.json      # Configuration for vital signs preprocessing
+│   └── xgboost_baseline_params.json   # Configuration for XGBoost baseline model
 ├── data/
 │   ├── raw/                           # Raw input data files (e.g., MIMIC-IV CSVs)
-│   └── processed/                     # Output of preprocessing scripts
+│   ├── processed/                     # Output of preprocessing scripts
+│   └── model_results/                 # Model outputs (metrics, plots, predictions)
 ├── notebooks/                         # Jupyter notebooks for testing and exploration
 │   ├── static_preprocessing.ipynb     # Notebook for static preprocessing development
 │   ├── ecg_preprocessing.ipynb        # Notebook for ECG preprocessing development
 │   ├── icd_extraction.ipynb           # Notebook for ICD code extraction development
 │   ├── vitals_preprocessing.ipynb     # Notebook for vitals preprocessing development
+│   ├── xgboost_baseline.ipynb         # Notebook for XGBoost baseline model development
 │   └── misc/                          # Miscellaneous notebooks
 ├── src/
-│   └── preprocessing/
-│       ├── static_preprocessing.py    # Functions to preprocess static/column-based data
-│       ├── ecg_preprocessing.py       # Functions to preprocess ECG signals
-│       ├── icd_entity_extraction.py   # Functions to extract cardiovascular clinical entities from ICD codes
-│       ├── icd_code_labels.py         # ICD-10 code label mappings for cardiovascular conditions
-│       ├── vitals_preprocessing.py    # Functions to preprocess vital signs data
-│       └── machine_measurements_labels.py  # Label mappings for machine measurements (e.g., ventilator, IABP)
+│   ├── preprocessing/
+│   │   ├── static_preprocessing.py    # Functions to preprocess static/column-based data
+│   │   ├── ecg_preprocessing.py       # Functions to preprocess ECG signals
+│   │   ├── icd_entity_extraction.py   # Functions to extract cardiovascular clinical entities from ICD codes
+│   │   ├── icd_code_labels.py         # ICD-10 code label mappings for cardiovascular conditions
+│   │   ├── vitals_preprocessing.py    # Functions to preprocess vital signs data
+│   │   └── machine_measurements_labels.py  # Label mappings for machine measurements (e.g., ventilator, IABP)
+│   └── models/
+│       └── xgboost_baseline.py        # XGBoost baseline model for multi-label classification
 ├── run.py                             # Main script to execute the preprocessing pipeline
 ├── requirements.txt                   # Python dependencies
 └── README.md
@@ -184,6 +196,63 @@ Alternatively, download complete datasets and filter locally:
 
 **Note:** BigQuery is more efficient for large-scale filtering.
 
+---
+
+## Baseline Models
+
+### XGBoost Multi-Label Classifier
+
+The baseline model uses gradient boosted decision trees (XGBoost) with a multi-output approach to handle multiple simultaneous prediction targets.
+
+#### Model Architecture
+- **Algorithm:** XGBoost with MultiOutputClassifier wrapper
+- **Task:** Multi-label binary classification
+- **Training:** One XGBoost classifier per label (independent binary classifiers)
+- **Max Depth:** 6
+- **Learning Rate:** 0.1
+- **Estimators:** 100 trees per label
+- **Train/Test Split:** 80/20 stratified by patient (ensures no patient overlap)
+
+#### Prediction Tasks
+
+**Task 1: Diagnosis Prediction (`labels`)**
+- **Goal:** Predict cardiovascular ICD-10 diagnosis labels
+- **Input Features:**
+  - ECG machine measurements (`report_*` columns): rhythm findings, QT intervals, axis measurements
+  - Vital signs statistics: mean, std, min, max over 4-hour window before ECG
+  - Closest vitals to ECG time: temperature, heart rate, respiratory rate, O2 saturation, blood pressure
+- **Output Labels:** Binary indicators for cardiovascular diagnosis codes (e.g., atrial fibrillation, heart failure, MI)
+
+**Task 2: ECG Finding Prediction (`reports`)**
+- **Goal:** Predict ECG machine-reported findings
+- **Input Features:**
+  - Vital signs statistics and closest measurements (same as above)
+  - Diagnosis labels: cardiovascular ICD-10 codes
+- **Output Labels:** Binary indicators for ECG findings (e.g., sinus rhythm, prolonged QT, LVH)
+
+#### Evaluation Metrics
+
+For each label, the model reports:
+- **ROC-AUC:** Area under receiver operating characteristic curve
+- **PR-AUC:** Area under precision-recall curve (important for imbalanced labels)
+- **Support:** Number of positive cases in test set
+
+Aggregated metrics across all labels:
+- **Confusion Matrix:** Sum of all label predictions
+- **Overall Accuracy, Precision, Recall, F1-Score:** Micro-averaged across labels
+
+#### Visualizations
+
+Three-panel evaluation plots:
+1. **ROC Curves:** All labels overlaid with color-coding by performance
+2. **Precision-Recall Curves:** All labels overlaid with color-coding
+3. **Aggregated Confusion Matrix:** Summed predictions across all labels
+
+Colors indicate performance tiers:
+- Dark blue: Excellent (ROC-AUC ≥ 0.95 or PR-AUC ≥ 0.7)
+- Purple: Good (ROC-AUC ≥ 0.85 or PR-AUC ≥ 0.3)
+- Red: Needs improvement (below thresholds)
+
 ## Installation
 
 ### 1. Clone the Repository
@@ -244,6 +313,34 @@ Each step reads its configuration from the corresponding JSON file in `configs/`
 - `ecg_preprocessing_params.json`
 - `vitals_preprocessing_params.json`
 - `icdcode_extractor_params.json`
+
+---
+
+### Running the XGBoost Baseline Models
+
+After preprocessing, train baseline XGBoost models for multi-label prediction:
+
+```bash
+# Train model to predict diagnosis labels (from ECG + vitals)
+python run.py --xgboost labels
+
+# Train model to predict ECG findings (from vitals + diagnoses)
+python run.py --xgboost reports
+
+# Train both models
+python run.py --xgboost labels
+python run.py --xgboost reports
+```
+
+#### Model Outputs
+
+Results are saved to `data/model_results/`:
+- `xgboost_baseline_diagnosis_results.csv`: Per-label performance metrics (ROC-AUC, PR-AUC, support)
+- `xgboost_baseline_diagnosis_evaluation_plots.png`: ROC curves, PR curves, and confusion matrix
+- `xgboost_baseline_ecg_report_results.csv`: Performance metrics for ECG findings (ROC-AUC, PR-AUC, support)
+- `xgboost_baseline_ecg_report_evaluation_plots.png`: Evaluation plots for ECG findings
+
+---
 
 ### Exploratory Analysis
 
