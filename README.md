@@ -178,6 +178,19 @@ WHERE eds.subject_id IN (
 )
 ```
 
+### 8. ED Vitals
+```sql
+-- ED vital signs for subjects with ECG data
+SELECT
+ subject_id,stay_id,charttime,temperature,heartrate,resprate,o2sat,sbp,dbp
+FROM `physionet-data.mimiciv_ed.vitalsign`
+WHERE subject_id IN (
+ SELECT DISTINCT subject_id
+ FROM `physionet-data.mimiciv_ecg.machine_measurements`
+)
+ORDER BY charttime;
+```
+
 ### Data Placement
 
 After running these queries:
@@ -277,6 +290,7 @@ Ensure all required CSV files are in `data/raw/` before running preprocessing:
 - `machine_measurements.csv`
 - `patients.csv`
 - `record_list.csv`
+- `ed_vitals.csv`
 
 ## Usage
 
@@ -332,14 +346,17 @@ python run.py --xgboost labels
 python run.py --xgboost reports
 ```
 
-#### Model Outputs
+### Model Output Files
 
-Results are saved to `data/model_results/`:
-- `xgboost_baseline_diagnosis_results.csv`: Per-label performance metrics (ROC-AUC, PR-AUC, support)
-- `xgboost_baseline_diagnosis_evaluation_plots.png`: ROC curves, PR curves, and confusion matrix
-- `xgboost_baseline_ecg_report_results.csv`: Performance metrics for ECG findings (ROC-AUC, PR-AUC, support)
-- `xgboost_baseline_ecg_report_evaluation_plots.png`: Evaluation plots for ECG findings
+The model generates output files with names based on the target type, saved to `data/model_results/`:
 
+- `xgboost_baseline_diagnosis_results.csv` - Per-label performance metrics (ROC-AUC, PR-AUC, support)
+- `xgboost_baseline_diagnosis_evaluation_plots.png` - ROC curves, PR curves, and aggregated confusion matrix
+- `xgboost_baseline_diagnosis_label_confusion_matrix.png` - Label co-occurrence matrix showing when true label on Y-axis is positive, how often predicted label on X-axis is also predicted positive
+
+- `xgboost_baseline_ecg_report_results.csv` - Performance metrics for ECG findings (ROC-AUC, PR-AUC, support)
+- `xgboost_baseline_ecg_report_evaluation_plots.png` - ROC curves, PR curves, and aggregated confusion matrix for ECG findings
+- `xgboost_baseline_ecg_report_label_confusion_matrix.png` - ECG report co-occurrence matrix showing prediction patterns across different ECG findings
 ---
 
 ### Exploratory Analysis
