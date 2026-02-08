@@ -2,4 +2,7 @@
 data/*
 __pycache__/
 *.pyc
-**/.ipynb_checkpoints/
+**/.ipynb_checkpoints/notebooks/Untitled.ipynb
+notebooks/baselineWeverything.ipynb
+notebooks/diagnosis_and_report.ipynb
+notebooks/report_diagnosis.ipynb
