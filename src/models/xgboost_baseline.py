@@ -22,6 +22,16 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
+ECG_NUMERIC = [
+    'rr_interval',
+    'p_onset', 'p_end',
+    'qrs_onset', 'qrs_end',
+    't_end',
+    'p_axis', 'qrs_axis', 't_axis'
+    ]
+
+ENGINEERED_ECG = ['qrs_duration', 'pr_interval', 'qt_proxy']
+
 
 def load_config(config_path):
     """Load configuration from JSON file."""
@@ -283,6 +293,29 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
     )
     
     return model_df
+    
+def engineer_ecg_features(ecg_df):
+    """
+    Create numeric + engineered ECG features.
+    Assumes one ECG per (subject_id, ed_stay_id).
+    """
+    ecg_df = ecg_df.copy()
+
+    # Ensure numeric
+    for col in ECG_NUMERIC:
+        if col in ecg_df.columns:
+            ecg_df[col] = pd.to_numeric(ecg_df[col], errors='coerce')
+
+    # Engineered intervals
+    ecg_df['qrs_duration'] = ecg_df['qrs_end'] - ecg_df['qrs_onset']
+    ecg_df['pr_interval'] = ecg_df['qrs_onset'] - ecg_df['p_onset']
+    ecg_df['qt_proxy'] = ecg_df['t_end'] - ecg_df['qrs_onset']
+
+    keep_cols = ['subject_id', 'ed_stay_id'] + ECG_NUMERIC + ENGINEERED_ECG
+    keep_cols = [c for c in keep_cols if c in ecg_df.columns]
+
+    return ecg_df[keep_cols]
+
 
 
 def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
@@ -304,9 +337,15 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
             output_prefix: Prefix for output files
     """
     model_df_encoded = pd.get_dummies(model_df, columns=['race', 'gender'], drop_first=True)
+    
+
 
     # Get machine measurement columns
-    machine_cols = [col for col in ed_ecg_records.columns if col.startswith('report_')]
+    machine_report_cols = [col for col in ed_ecg_records.columns if col.startswith('report_')]
+    ecg_features = [
+        col for col in ECG_NUMERIC + ENGINEERED_ECG
+        if col in model_df_encoded.columns
+    ]
     
     # Get vital sign features
     vital_features = [col for col in model_df_encoded.columns if any(
@@ -321,12 +360,12 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
     # Determine features and targets based on target_type
     if target_type == 'labels':
         # Predict labels using machine reports + vital + demo as features
-        X_features = machine_cols + vital_features + demo_features
+        X_features = ecg_features + machine_report_cols + vital_features + demo_features
         y_features = label_cols
         output_prefix = 'diagnosis'
     elif target_type == 'reports':
         # Predict machine reports using vitals + demo as features
-        X_features = vital_features + demo_features
+        X_features = ecg_features + vital_features + demo_features
         y_features = machine_cols
         output_prefix = 'ecg_report'
     else:
@@ -378,8 +417,18 @@ def create_train_test_set(model_df, X, y, test_size=0.2, random_state=42):
 
 def train_xgboost_model(X_train, y_train):
     """Train XGBoost multi-output classifier."""
+    #Changed this for it to work on my end, feel free to keep the original
+    #xgb_clf = XGBClassifier(
+    #    n_estimators=100,
+    #    max_depth=5,
+    #    learning_rate=0.1,
+    #    eval_metric='logloss',
+    #    random_state=42
+    #)
     xgb_clf = XGBClassifier(
         n_estimators=100,
+        objective="binary:logistic",
+        base_score=0.5,  # force valid initial probability
         max_depth=5,
         learning_rate=0.1,
         eval_metric='logloss',
@@ -702,6 +751,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"[3/9] {steps[2]}")
         earliest_ecgs = get_earliest_ecg_per_stay(ed_ecg_records)
+        ecg_numeric_df = engineer_ecg_features(earliest_ecgs)
         pbar.update(1)
         
         pbar.set_description(f"[4/9] {steps[3]}")
@@ -711,6 +761,11 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"[5/9] {steps[4]}")
         model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
+        model_df = model_df.merge(
+        ecg_numeric_df,
+        on=['subject_id', 'ed_stay_id'],
+        how='left'
+        )
         pbar.update(1)
         
         pbar.set_description(f"[6/9] {steps[5]}")
@@ -720,6 +775,11 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"[7/9] {steps[6]}")
         X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
+        print(y_train.describe())
+        print(y_train.nunique())
+        print((y_train > 1).sum().sum(), (y_train < 0).sum().sum())
+
+        
         pbar.update(1)
         
         pbar.set_description(f"[8/9] {steps[7]}")
