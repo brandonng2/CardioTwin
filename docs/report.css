@@ -292,9 +292,9 @@ body {
   background: var(--bg-card);
   border: 0.5px solid rgba(0, 0, 0, 0.04);
   border-radius: var(--radius);
-  padding: 1.5rem;
+  padding: 0.25rem;
   box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.06);
-  height: 450px;
+  height: 550px;
 }
 
 .chart-caption {

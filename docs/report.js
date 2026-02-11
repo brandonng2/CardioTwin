@@ -1,4 +1,6 @@
 /* D3.js vital signs background + scroll animations + stat counters */
+/* Version 2.0 - Updated to use external CSV file */
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm";
 
 document.addEventListener("DOMContentLoaded", () => {
   initVitalsBackground();
@@ -305,60 +307,57 @@ function initDeathsChart() {
   const container = document.getElementById("deaths-chart");
   if (!container || typeof d3 === "undefined") return;
 
-  // Parse CSV data inline
-  const csvData = `year,cause,deaths,deaths_lower,deaths_upper
-1980,Cardiovascular diseases,12116561.690830473,11028346.853724385,13048659.658636544
-1985,Cardiovascular diseases,12508892.646832569,11475136.302037831,13399628.763302252
-1990,Cardiovascular diseases,13397894.064827552,12324095.870838743,14301438.088748962
-1995,Cardiovascular diseases,14252863.10673066,13064253.093649315,15149734.267043978
-2000,Cardiovascular diseases,15127530.885299476,13879623.950844133,16111774.64372334
-2005,Cardiovascular diseases,15786072.36889781,14556042.65296635,16720668.82324493
-2010,Cardiovascular diseases,16264606.172654845,15042527.090062413,17219098.65093289
-2015,Cardiovascular diseases,17208352.084747426,16001323.110538438,18112386.37971564
-2020,Cardiovascular diseases,17658557.794214997,16115057.799830234,18749602.69506749
-2023,Cardiovascular diseases,19139018.09368501,17355526.65696515,20403359.75555195
-1980,Total cancers,4778620.553689183,4525408.852813329,5123498.452049806
-1985,Total cancers,5243088.295219312,4985351.092824577,5579725.939122331
-1990,Total cancers,5818373.7682823,5531829.350125331,6195429.569206173
-1995,Total cancers,6570664.943881275,6214779.086894074,6953063.732348664
-2000,Total cancers,7197354.8802422695,6827085.349044554,7531287.283883136
-2005,Total cancers,7646574.055173976,7237699.4734898405,7987127.8031253275
-2010,Total cancers,8103866.875827074,7603834.042959072,8395699.093856633
-2015,Total cancers,8620278.446351437,8044840.465108759,8976676.55472392
-2020,Total cancers,9369755.232305313,8750021.063785639,9787012.972000783
-2023,Total cancers,10434120.432555158,9605088.887119193,11031333.441804592
-1980,Lower respiratory infections,3178213.2278480977,2770073.8375791293,3715304.185026179
-1985,Lower respiratory infections,3102678.439698333,2706624.726674132,3521553.770520356
-1990,Lower respiratory infections,3068959.6374048907,2710883.8869682537,3475802.1311421823
-1995,Lower respiratory infections,3180251.066062093,2750050.9766960074,3720127.3467134065
-2000,Lower respiratory infections,2960683.868950551,2556663.318859992,3405870.5476991506
-2005,Lower respiratory infections,2762654.5035363133,2401433.0950829215,3165458.7311464175
-2010,Lower respiratory infections,2564326.7172251386,2271393.2885682466,2874621.348697646
-2015,Lower respiratory infections,2550356.99843432,2282301.3591353777,2813512.75786936
-2020,Lower respiratory infections,2214586.490139366,1971694.79492917,2512381.8461652542
-2023,Lower respiratory infections,2501138.568273376,2240273.9879636248,2811711.568178583
-1980,Neonatal disorders,3400099.9510319303,3161964.759499208,3639679.066678661
-1985,Neonatal disorders,3335924.726877792,3166127.983560855,3538776.87990238
-1990,Neonatal disorders,3244127.327889293,3069839.6863009022,3432903.9473033673
-1995,Neonatal disorders,2948089.6324651763,2809659.8473064504,3094562.8621733887
-2000,Neonatal disorders,2563621.5458113905,2450645.7024095766,2695089.4663324035
-2005,Neonatal disorders,2279078.4969175486,2179899.3099316354,2390060.419072738
-2010,Neonatal disorders,2157298.125267168,2065127.3354177482,2253394.1059172372
-2015,Neonatal disorders,2018467.3728496935,1922053.3373190197,2117857.749870326
-2020,Neonatal disorders,1763856.671129841,1655034.933439844,1863133.560294462
-2023,Neonatal disorders,1627961.732945383,1506008.7124160386,1748006.3058008086`;
+  // Load CSV data from file
+  d3.csv("top_10_causes_of_death.csv").then((data) => {
+    renderDeathsChart(data, container);
+  }).catch((error) => {
+    console.error("Error loading CSV:", error);
+  });
+}
 
-  const data = d3.csvParse(csvData);
+function renderDeathsChart(data, container) {
   const grouped = d3.group(data, (d) => d.cause);
 
-  const colorMap = {
-    "Cardiovascular diseases": "#ff6482",
-    "Total cancers": "#af52de",
-    "Lower respiratory infections": "#bf5af2",
-    "Neonatal disorders": "#ff8fa3",
-  };
+  // Filter to keep only the top 5 causes by total deaths in 2023
+  const causeTotals = Array.from(grouped.entries()).map(([cause, values]) => {
+    const latest = values.find(d => d.year === "2023");
+    return {
+      cause,
+      total: latest ? +latest.deaths : 0
+    };
+  });
+  
+  // Sort and keep top 5
+  const topCauses = causeTotals
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 5)
+    .map(d => d.cause);
+  
+  // Filter grouped data to only include top causes
+  const filteredGrouped = new Map(
+    Array.from(grouped.entries()).filter(([cause]) => topCauses.includes(cause))
+  );
 
-  const margin = { top: 30, right: 20, bottom: 50, left: 70 };
+  // Create a color gradient from ECG primary to secondary
+  const primaryColor = "#ff6482";  // ecg-primary
+  const secondaryColor = "#af52de"; // ecg-secondary (darker)
+  
+  // Generate colors interpolating between primary and secondary
+  const colorScale = d3.interpolateRgb(primaryColor, secondaryColor);
+  const causes = Array.from(filteredGrouped.keys());
+  const colorMap = {};
+  
+  causes.forEach((cause, i) => {
+    const t = i / Math.max(1, causes.length - 1); // 0 to 1
+    colorMap[cause] = colorScale(t);
+  });
+  
+  // Ensure Cardiovascular diseases gets the primary color
+  if (colorMap["Cardiovascular diseases"]) {
+    colorMap["Cardiovascular diseases"] = primaryColor;
+  }
+
+  const margin = { top: 30, right: 30, bottom: 90, left: 70 };
   let svg = null;
   let chartElements = null;
 
@@ -374,8 +373,10 @@ function initDeathsChart() {
     svg = d3
       .select(container)
       .append("svg")
-      .attr("width", containerWidth)
-      .attr("height", containerHeight)
+      .attr("width", "100%")
+      .attr("height", "100%")
+      .attr("viewBox", `0 0 ${containerWidth} ${containerHeight}`)
+      .attr("preserveAspectRatio", "xMidYMid meet")
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
@@ -434,8 +435,23 @@ function initDeathsChart() {
       .y((d) => y(+d.deaths))
       .curve(d3.curveMonotoneX);
 
+    // Create tooltip
+    const tooltip = d3.select("body")
+      .append("div")
+      .attr("class", "chart-tooltip")
+      .style("position", "absolute")
+      .style("visibility", "hidden")
+      .style("background", "rgba(255, 255, 255, 0.95)")
+      .style("padding", "12px 16px")
+      .style("border-radius", "8px")
+      .style("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
+      .style("font-size", "13px")
+      .style("pointer-events", "none")
+      .style("z-index", "1000")
+      .style("border", "1px solid #d2d2d7");
+
     // Draw lines for each cause with animation
-    grouped.forEach((values, cause) => {
+    filteredGrouped.forEach((values, cause) => {
       const sortedValues = values.sort((a, b) => +a.year - +b.year);
 
       const path = svg
@@ -443,7 +459,7 @@ function initDeathsChart() {
         .datum(sortedValues)
         .attr("fill", "none")
         .attr("stroke", colorMap[cause] || "#d2d2d7")
-        .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2)
+        .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5)
         .attr("d", line);
 
       // Animate line drawing
@@ -452,39 +468,92 @@ function initDeathsChart() {
       path
         .attr("stroke-dasharray", totalLength + " " + totalLength)
         .attr("stroke-dashoffset", totalLength)
-        .style("opacity", 0.9)
+        .style("opacity", 0.85)
         .transition()
         .duration(1500)
         .ease(d3.easeLinear)
         .attr("stroke-dashoffset", 0);
+
+      // Add invisible wider line for easier hovering
+      const hoverPath = svg
+        .append("path")
+        .datum(sortedValues)
+        .attr("fill", "none")
+        .attr("stroke", "transparent")
+        .attr("stroke-width", 20)
+        .attr("d", line)
+        .style("cursor", "pointer")
+        .on("mouseover", function(event) {
+          // Highlight the line
+          path.style("opacity", 1).attr("stroke-width", cause === "Cardiovascular diseases" ? 4 : 3.5);
+          tooltip.style("visibility", "visible");
+        })
+        .on("mousemove", function(event) {
+          // Find closest data point
+          const [mouseX] = d3.pointer(event, svg.node());
+          const year = Math.round(x.invert(mouseX));
+          const dataPoint = sortedValues.find(d => +d.year === year) || sortedValues[0];
+          
+          const deaths = (+dataPoint.deaths / 1000000).toFixed(2);
+          
+          tooltip
+            .html(`
+              <div style="font-weight: 600; color: ${colorMap[cause]}; margin-bottom: 6px;">${cause}</div>
+              <div style="color: #1d1d1f;"><strong>Year:</strong> ${dataPoint.year}</div>
+              <div style="color: #1d1d1f;"><strong>Deaths:</strong> ${deaths}M</div>
+            `)
+            .style("top", (event.pageY - 10) + "px")
+            .style("left", (event.pageX + 10) + "px");
+        })
+        .on("mouseout", function() {
+          path.style("opacity", 0.85).attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5);
+          tooltip.style("visibility", "hidden");
+        });
     });
 
-    // Add legend inside chart area
+    // Add horizontal legend below the chart with 2-2-1 layout
     const legend = svg
       .append("g")
-      .attr("transform", `translate(${width - 200}, 10)`);
+      .attr("transform", `translate(0, ${height + 55})`);
 
     Object.entries(colorMap).forEach(([cause, color], i) => {
+      let xPos, yPos;
+      
+      if (i < 2) {
+        // First row (2 items) - -30 and 180
+        xPos = i === 0 ? -30 : 180;
+        yPos = 0;
+      } else if (i < 4) {
+        // Second row (2 items) - -30 and 180
+        const secondRowIndex = i - 2;
+        xPos = secondRowIndex === 0 ? -30 : 180;
+        yPos = 24;
+      } else {
+        // Third row (1 item) - -30
+        xPos = -30;
+        yPos = 48;
+      }
+      
       const g = legend
         .append("g")
-        .attr("transform", `translate(0, ${i * 22})`)
+        .attr("transform", `translate(${xPos}, ${yPos})`)
         .style("opacity", 0);
 
       g.append("line")
         .attr("x1", 0)
-        .attr("x2", 20)
+        .attr("x2", 24)
         .attr("y1", 0)
         .attr("y2", 0)
         .attr("stroke", color)
-        .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2);
+        .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5);
 
       g.append("text")
-        .attr("x", 26)
+        .attr("x", 30)
         .attr("y", 4)
         .text(cause)
-        .style("font-size", "10px")
+        .style("font-size", "12px")
         .style("fill", "#1d1d1f")
-        .style("font-weight", "400");
+        .style("font-weight", cause === "Cardiovascular diseases" ? "600" : "400");
 
       // Fade in legend items
       g.transition()
@@ -498,13 +567,14 @@ function initDeathsChart() {
     d3.select(container).selectAll("*").remove();
   };
 
+  let isChartCreated = false;
+
   const observer = new IntersectionObserver(
     (entries) => {
       entries.forEach((entry) => {
-        if (entry.isIntersecting) {
+        if (entry.isIntersecting && !isChartCreated) {
+          isChartCreated = true;
           createChart();
-        } else {
-          clearChart();
         }
       });
     },
