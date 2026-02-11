@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="report.css">
+</head>
+
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">Cardiovascular Digital Twin</a>
+      <div class="nav-links">
+        <a href="#problem">The Problem</a>
+        <a href="#solution">Solution</a>
+        <a href="#how-it-works">How It Works</a>
+        <a href="#methodology">Methodology</a>
+        <a href="#results">Results</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div id="vitals-bg" class="vitals-bg"></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <p class="hero-eyebrow">Capstone Project</p>
+      <h1>Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring</h1>
+      <p class="hero-subtitle">
+        Cardiovascular disease is the <strong>#1 cause of death worldwide</strong>—nearly 18 million lives each year.
+        We're creating the data foundation for digital twins that could enable earlier diagnosis, personalized risk
+        prediction, and better outcomes.
+      </p>
+      <a href="#problem" class="hero-cta">Explore the project ↓</a>
+    </div>
+  </header>
+
+  <!-- Stats strip -->
+  <section class="stats-strip">
+    <div class="stat animate-on-scroll">
+      <span class="stat-value" data-target="18">0</span>
+      <span class="stat-suffix">M+</span>
+      <span class="stat-label">Deaths from CVD yearly</span>
+    </div>
+    <div class="stat animate-on-scroll">
+      <span class="stat-value" data-target="3">0</span>
+      <span class="stat-suffix">datasets</span>
+      <span class="stat-label">MIMIC-IV integrated</span>
+    </div>
+    <div class="stat animate-on-scroll">
+      <span class="stat-value" data-target="2">0</span>
+      <span class="stat-suffix">prediction tasks</span>
+      <span class="stat-label">Diagnosis + ECG findings</span>
+    </div>
+  </section>
+
+  <main class="content">
+    <section id="problem" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>The Problem</h2>
+        <p>
+          Heart disease and stroke claim more lives than all forms of cancer combined. Despite advances in treatment,
+          timely detection and personalized risk stratification remain critical gaps. Clinical data is fragmented across
+          hospitals, ED visits, and specialized tests—making it difficult to build AI that sees the full patient
+          picture.
+        </p>
+      </div>
+    </section>
+
+    <section id="solution" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>Our Solution</h2>
+        <p>
+          <strong>Clinical Digital Twin</strong> is an end-to-end pipeline that unifies MIMIC-IV hospital data,
+          emergency department records, and ECG measurements into a single representation for cardiovascular patients.
+          We train baseline models that predict diagnoses and ECG findings—establishing benchmarks for deeper AI that
+          could one day support clinicians at the point of care.
+        </p>
+        <div class="feature-pills">
+          <span class="pill">EHR + Vitals + ECG</span>
+          <span class="pill">Modular pipeline</span>
+          <span class="pill">XGBoost baselines</span>
+          <span class="pill">PhysioNet / MIMIC-IV</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="section animate-on-scroll">
+      <h2 class="section-title">How It Works</h2>
+      <div class="pipeline-visual">
+        <div class="pipeline-step animate-on-scroll">
+          <div class="step-icon">📋</div>
+          <h3>Static</h3>
+          <p>Demographics, admissions, comorbidities</p>
+        </div>
+        <div class="pipeline-connector"></div>
+        <div class="pipeline-step animate-on-scroll">
+          <div class="step-icon">📈</div>
+          <h3>ECG</h3>
+          <p>Signals + machine measurements</p>
+        </div>
+        <div class="pipeline-connector"></div>
+        <div class="pipeline-step animate-on-scroll">
+          <div class="step-icon">💓</div>
+          <h3>Vitals</h3>
+          <p>Time-series vital signs</p>
+        </div>
+        <div class="pipeline-connector"></div>
+        <div class="pipeline-step animate-on-scroll">
+          <div class="step-icon">🏷️</div>
+          <h3>Labels</h3>
+          <p>ICD-10 cardiovascular codes</p>
+        </div>
+      </div>
+      <p class="section-description">Our model integrates multiple clinical data streams into a unified patient
+        representation to capture a comprehensive view of cardiovascular health. We combine baseline demographic and
+        admission-level features such as age, ethnicity, gender, and race with structured clinical measurements
+        including heart rate, blood pressure, oxygen saturation, and temperature. In addition, we incorporate
+        electrocardiogram data by leveraging both machine-generated measurements such as PR interval, QRS duration, and
+        QTc, along with raw waveform signals to provide high-resolution insight into cardiac electrophysiology.
+
+        These heterogeneous data sources are standardized through temporal alignment, normalization, missing value
+        handling, and feature encoding to ensure consistency across modalities. Static features are encoded once per
+        admission, while time-series signals are aggregated or modeled using sequential architectures to capture dynamic
+        physiological trends. The result is a multimodal patient-level representation that reflects both baseline risk
+        and real-time cardiac state, enabling robust cardiovascular risk modeling and improved predictive performance.
+      </p>
+    </section>
+
+    <section id="data" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>Data Sources</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Dataset</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="dataset-tag">MIMIC-IV v3.1</span></td>
+                <td>Hospital & ICU: admissions, diagnoses, lab events, vitals</td>
+              </tr>
+              <tr>
+                <td><span class="dataset-tag">MIMIC-IV-ED v2.2</span></td>
+                <td>Emergency department visits, diagnoses, vitals</td>
+              </tr>
+              <tr>
+                <td><span class="dataset-tag">MIMIC-IV-ECG v1.0</span></td>
+                <td>Electrocardiogram recordings and measurements</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="methodology" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>Model Architecture</h2>
+        <p>XGBoost multi-label classifiers for two prediction tasks:</p>
+        <div class="model-cards">
+          <div class="model-card animate-on-scroll">
+            <div class="model-card-header">
+              <span class="model-badge">Task 1</span>
+              <h3>Diagnosis Prediction</h3>
+            </div>
+            <p><strong>Input:</strong> ECG measurements, vitals stats, demographics</p>
+            <p><strong>Output:</strong> Cardiovascular ICD-10 labels (AFib, HF, MI, etc.)</p>
+          </div>
+          <div class="model-card animate-on-scroll">
+            <div class="model-card-header">
+              <span class="model-badge">Task 2</span>
+              <h3>ECG Finding Prediction</h3>
+            </div>
+            <p><strong>Input:</strong> Vitals stats, diagnosis labels, demographics</p>
+            <p><strong>Output:</strong> ECG findings (sinus rhythm, prolonged QT, etc.)</p>
+          </div>
+        </div>
+        <div class="config-grid">
+          <div class="config-item"><span class="config-label">Algorithm</span>XGBoost + MultiOutputClassifier</div>
+          <div class="config-item"><span class="config-label">Train/Test</span>80/20 by patient</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="results" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>Results</h2>
+        <p>
+          More later...
+        </p>
+      </div>
+    </section>
+
+    <section id="references" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>References</h2>
+        <ol class="references">
+          <li>Johnson, A., et al. MIMIC-IV (v3.1). PhysioNet.</li>
+          <li>Gow, B., et al. MIMIC-IV-ECG (v1.0). PhysioNet.</li>
+          <li>Gaichies, E., et al. MIMIC-IV-ED (v2.2). PhysioNet.</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <p>Cardiovascular Digital Twin · Capstone Project</p>
+      <p class="footer-author">Made by Brandon Ng, Shruti Yamala, and Samuel Eun </p>
+      <p class="footer-meta">Data from PhysioNet / MIT Lab for Computational Physiology</p>
+      <p class="license">PhysioNet Credentialed Health Data License · Research use only</p>
+    </div>
+  </footer>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="report.js"></script>
+</body>
+
+</html>
