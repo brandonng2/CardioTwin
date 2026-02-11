@@ -292,7 +292,7 @@ body {
   background: var(--bg-card);
   border: 0.5px solid rgba(0, 0, 0, 0.04);
   border-radius: var(--radius);
-  padding: 0.25rem;
+  padding: 1.5rem;
   box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.06);
   height: 550px;
 }
@@ -303,6 +303,50 @@ body {
   color: var(--text-muted);
   margin-top: 0.75rem;
   letter-spacing: -0.01em;
+}
+
+/* Fact cards */
+.fact-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  margin-top: 0;
+}
+
+.fact-card {
+  background: var(--bg-elevated);
+  border: 0.5px solid rgba(0, 0, 0, 0.04);
+  border-radius: var(--radius);
+  padding: 1rem 1rem;
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s;
+}
+
+.fact-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.1);
+}
+
+.fact-number {
+  font-size: 3rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.005em;
+  line-height: 1;
+  margin-bottom: 0.75rem;
+}
+
+.fact-text {
+  font-size: 0.875rem;
+  line-height: 1.47059;
+  color: var(--text-muted);
+  letter-spacing: -0.022em;
+  max-width: 180px;
 }
 
 /* Scroll animations */
