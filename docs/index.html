@@ -42,35 +42,39 @@
     </div>
   </header>
 
-  <!-- Stats strip -->
-  <section class="stats-strip">
-    <div class="stat animate-on-scroll">
-      <span class="stat-value" data-target="18">0</span>
-      <span class="stat-suffix">M+</span>
-      <span class="stat-label">Deaths from CVD yearly</span>
-    </div>
-    <div class="stat animate-on-scroll">
-      <span class="stat-value" data-target="3">0</span>
-      <span class="stat-suffix">datasets</span>
-      <span class="stat-label">MIMIC-IV integrated</span>
-    </div>
-    <div class="stat animate-on-scroll">
-      <span class="stat-value" data-target="2">0</span>
-      <span class="stat-suffix">prediction tasks</span>
-      <span class="stat-label">Diagnosis + ECG findings</span>
-    </div>
-  </section>
-
   <main class="content">
     <section id="problem" class="section animate-on-scroll">
-      <div class="card card-reveal">
-        <h2>The Problem</h2>
-        <p>
-          Heart disease and stroke claim more lives than all forms of cancer combined. Despite advances in treatment,
-          timely detection and personalized risk stratification remain critical gaps. Clinical data is fragmented across
-          hospitals, ED visits, and specialized tests—making it difficult to build AI that sees the full patient
-          picture.
-        </p>
+      <div class="problem-container">
+        <div class="problem-left">
+          <h2>The Problem</h2>
+          <div class="cvd-stat">
+            <span class="cvd-number" id="cvd-counter">0</span>
+            <span class="cvd-label">estimated cardiovascular disease deaths in 2025</span>
+            <span class="cvd-source">According to the Global Burden of Disease</span>
+          </div>
+          <p>
+            Heart disease and stroke claim more lives than all forms of cancer combined. Despite advances in treatment,
+            timely detection and personalized risk stratification remain critical gaps. Clinical data is fragmented
+            across
+            hospitals, ED visits, and specialized tests—making it difficult to build AI that sees the full patient
+            picture.
+          </p>
+          <div class="fact-cards">
+            <div class="fact-card">
+              <div class="fact-number">1 in 5</div>
+              <div class="fact-text">deaths in the US are from heart disease</div>
+            </div>
+            <div class="fact-card">
+              <div class="fact-number">685,000</div>
+              <div class="fact-text">Americans died from heart disease in 2024</div>
+            </div>
+          </div>
+        </div>
+        <div class="problem-right">
+          <div id="deaths-chart" class="chart-container"></div>
+          <div class="chart-caption">Leading causes of death worldwide (1980-2023) - Global Burden of Disease Study 2023
+          </div>
+        </div>
       </div>
     </section>
 
@@ -206,6 +210,13 @@
       <div class="card card-reveal">
         <h2>References</h2>
         <ol class="references">
+          <li>Global Burden of Disease Collaborative Network. Global Burden of Disease Study 2023 (GBD 2023) Results.
+            Seattle, United States: Institute for Health Metrics and Evaluation (IHME), 2024. Available from <a
+              href="https://vizhub.healthdata.org/gbd-results/"
+              target="_blank">https://vizhub.healthdata.org/gbd-results/</a></li>
+          <li>Centers for Disease Control and Prevention. Heart Disease Facts & Statistics. Available from <a
+              href="https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html"
+              target="_blank">https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html</a></li>
           <li>Johnson, A., et al. MIMIC-IV (v3.1). PhysioNet.</li>
           <li>Gow, B., et al. MIMIC-IV-ECG (v1.0). PhysioNet.</li>
           <li>Gaichies, E., et al. MIMIC-IV-ED (v2.2). PhysioNet.</li>
