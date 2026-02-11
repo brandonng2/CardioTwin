@@ -220,7 +220,7 @@ body {
   line-height: 1.1;
 }
 
-/* Problem section layout */
+/* Problem section layout - FIXED for smooth scroll */
 .problem-container {
   display: grid;
   grid-template-columns: 1fr 1.2fr;
@@ -231,8 +231,7 @@ body {
 .problem-left {
   display: flex;
   flex-direction: column;
-  height: 31.125rem;
-  justify-content: space-between;
+  gap: 1.5rem;
 }
 
 .problem-left h2 {
@@ -249,14 +248,14 @@ body {
   line-height: 1.47059;
   color: var(--text);
   letter-spacing: -0.022em;
-  margin: 0 0 0 0;
+  margin: 0;
 }
 
 .cvd-stat {
   display: flex;
   flex-direction: column;
   padding: 0;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0;
 }
 
 .cvd-number {
@@ -283,46 +282,10 @@ body {
   letter-spacing: -0.01em;
 }
 
-.fact-cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin-top: 0;
-}
-
-.fact-card {
-  background: var(--bg-elevated);
-  padding: 2rem 1.5rem;
-  border-radius: var(--radius-sm);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  display: flex;
-  flex-direction: column;
-}
-
-.fact-card:hover {
-  transform: translateY(-0.125rem);
-}
-
-.fact-number {
-  font-size: 3rem;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 1rem;
-  letter-spacing: -0.005em;
-  line-height: 1.1;
-}
-
-.fact-text {
-  font-size: 0.9375rem;
-  color: var(--text);
-  line-height: 1.5;
-  letter-spacing: -0.016em;
-  margin-bottom: 0.75rem;
-}
-
 .problem-right {
   position: sticky;
   top: calc(var(--nav-height) + 2.5rem);
+  align-self: start;
 }
 
 .chart-container {
@@ -331,7 +294,7 @@ body {
   border-radius: var(--radius);
   padding: 1.5rem;
   box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.06);
-  min-height: 25rem;
+  height: 450px;
 }
 
 .chart-caption {
@@ -545,7 +508,6 @@ code {
   margin: 0 8px;
 }
 
-
 /* Tables */
 .table-wrap {
   overflow-x: auto;
@@ -597,6 +559,12 @@ tbody tr:hover {
 .dataset-tag {
   font-weight: 600;
   color: var(--primary);
+  text-decoration: none;
+  transition: opacity 0.3s;
+}
+
+.dataset-tag:hover {
+  opacity: 0.7;
 }
 
 /* Model cards */
@@ -749,10 +717,6 @@ tbody tr:hover {
     gap: 40px;
   }
 
-  .problem-left {
-    height: auto;
-  }
-
   .problem-right {
     position: static;
   }
@@ -761,8 +725,8 @@ tbody tr:hover {
     font-size: 56px;
   }
 
-  .fact-cards {
-    grid-template-columns: 1fr;
+  .chart-container {
+    height: 400px;
   }
 }
 

@@ -59,7 +59,7 @@
             hospitals, ED visits, and specialized tests—making it difficult to build AI that sees the full patient
             picture.
           </p>
-          <div class="fact-cards">
+          <!-- <div class="fact-cards">
             <div class="fact-card">
               <div class="fact-number">1 in 5</div>
               <div class="fact-text">deaths in the US are from heart disease</div>
@@ -68,7 +68,7 @@
               <div class="fact-number">685,000</div>
               <div class="fact-text">Americans died from heart disease in 2024</div>
             </div>
-          </div>
+          </div> -->
         </div>
         <div class="problem-right">
           <div id="deaths-chart" class="chart-container"></div>
@@ -150,18 +150,24 @@
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td><span class="dataset-tag">MIMIC-IV v3.1</span></td>
+              <tr onclick="window.open('https://physionet.org/content/mimiciv/3.1/', '_blank')"
+                style="cursor: pointer;">
+                <td class="dataset-tag">MIMIC-IV v3.1</td>
                 <td>Hospital & ICU: admissions, diagnoses, lab events, vitals</td>
               </tr>
-              <tr>
-                <td><span class="dataset-tag">MIMIC-IV-ED v2.2</span></td>
+
+              <tr onclick="window.open('https://physionet.org/content/mimic-iv-ed/2.2/', '_blank')"
+                style="cursor: pointer;">
+                <td class="dataset-tag">MIMIC-IV-ED v2.2</td>
                 <td>Emergency department visits, diagnoses, vitals</td>
               </tr>
-              <tr>
-                <td><span class="dataset-tag">MIMIC-IV-ECG v1.0</span></td>
+
+              <tr onclick="window.open('https://physionet.org/content/mimic-iv-ecg/1.0/', '_blank')"
+                style="cursor: pointer;">
+                <td class="dataset-tag">MIMIC-IV-ECG v1.0</td>
                 <td>Electrocardiogram recordings and measurements</td>
               </tr>
+
             </tbody>
           </table>
         </div>
@@ -217,9 +223,6 @@
           <li>Centers for Disease Control and Prevention. Heart Disease Facts & Statistics. Available from <a
               href="https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html"
               target="_blank">https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html</a></li>
-          <li>Johnson, A., et al. MIMIC-IV (v3.1). PhysioNet.</li>
-          <li>Gow, B., et al. MIMIC-IV-ECG (v1.0). PhysioNet.</li>
-          <li>Gaichies, E., et al. MIMIC-IV-ED (v2.2). PhysioNet.</li>
         </ol>
       </div>
     </section>
