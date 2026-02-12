@@ -2,7 +2,7 @@ import json
 import argparse
 from pathlib import Path
 #change baseline vs baseline2 depending on what model you are running!
-from src.models.xgboost_baseline2 import run_xgboost_baseline_pipeline
+from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
