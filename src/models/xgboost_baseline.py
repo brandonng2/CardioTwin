@@ -366,7 +366,7 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
     elif target_type == 'reports':
         # Predict machine reports using vitals + demo as features
         X_features = ecg_features + vital_features + demo_features
-        y_features = machine_cols
+        y_features = machine_report_cols
         output_prefix = 'ecg_report'
     else:
         raise ValueError(f"target_type must be 'labels' or 'reports', got '{target_type}'")

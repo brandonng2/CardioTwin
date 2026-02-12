@@ -639,21 +639,12 @@ def create_train_test_set(model_df, X, y, test_size=0.2, random_state=42):
 def train_xgboost_model(X_train, y_train):
     """Train XGBoost multi-output classifier."""
     #Changed this for it to work on my end, feel free to keep the original
-    #xgb_clf = XGBClassifier(
-    #    n_estimators=100,
-    #    max_depth=5,
-    #    learning_rate=0.1,
-    #    eval_metric='logloss',
-    #    random_state=42
-    #)
     xgb_clf = XGBClassifier(
-        n_estimators=100,
-        objective="binary:logistic",
-        base_score=0.5,  # force valid initial probability
-        max_depth=5,
-        learning_rate=0.1,
-        eval_metric='logloss',
-        random_state=42
+       n_estimators=100,
+       max_depth=5,
+       learning_rate=0.1,
+       eval_metric='logloss',
+       random_state=42
     )
     
     multi_xgb = MultiOutputClassifier(xgb_clf, n_jobs=-1)
