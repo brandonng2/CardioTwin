@@ -33,6 +33,11 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 │   ├── raw/                           # Raw input data files (e.g., MIMIC-IV CSVs)
 │   ├── processed/                     # Output of preprocessing scripts
 │   └── model_results/                 # Model outputs (metrics, plots, predictions)
+├── docs/                              # Project documentation and reports
+│   ├── index.html                     # Main documentation page with interactive navigation
+│   ├── report.css                     # Styles for documentation website
+│   ├── report.js                      # Interactive functionality for documentation
+│   └── top_10_causes_of_death.csv     # Reference data for cardiovascular mortality statistics
 ├── notebooks/                         # Jupyter notebooks for testing and exploration
 │   ├── static_preprocessing.ipynb     # Notebook for static preprocessing development
 │   ├── ecg_preprocessing.ipynb        # Notebook for ECG preprocessing development
@@ -52,7 +57,7 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 │       └── xgboost_baseline.py        # XGBoost baseline model for multi-label classification
 ├── run.py                             # Main script to execute the preprocessing pipeline
 ├── requirements.txt                   # Python dependencies
-└── README.md
+└── README.md                          # Project overview and setup instructions
 ```
 
 ## Prerequisites
