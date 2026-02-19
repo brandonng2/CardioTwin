@@ -207,46 +207,46 @@ def run_static_preprocessing(in_dir, config_path, out_path):
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/10] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         pbar.update(1)
         
-        pbar.set_description(f"[2/10] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         (patients, admissions, hosp_diagnosis, 
          icustays, edstays, ed_diagnosis) = load_static_data(in_dir, config)
         pbar.update(1)
         
-        pbar.set_description(f"[3/10] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         patients_processed = preprocess_patient(patients)
         pbar.update(1)
         
-        pbar.set_description(f"[4/10] {steps[3]}")
+        pbar.set_description(f"{steps[3]}")
         admissions_processed = preprocess_admissions(admissions)
         pbar.update(1)
         
-        pbar.set_description(f"[5/10] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         hosp_diagnosis_cleaned = clean_diagnosis_data(hosp_diagnosis, prefix="hosp")
         pbar.update(1)
         
-        pbar.set_description(f"[6/10] {steps[5]}")
+        pbar.set_description(f"{steps[5]}")
         ed_diagnosis_cleaned = clean_diagnosis_data(ed_diagnosis, prefix="ed")
         pbar.update(1)
         
-        pbar.set_description(f"[7/10] {steps[6]}")
+        pbar.set_description(f"{steps[6]}")
         icustays_agg = preprocess_icustays(icustays)
         pbar.update(1)
         
-        pbar.set_description(f"[8/10] {steps[7]}")
+        pbar.set_description(f"{steps[7]}")
         edstays_cleaned = preprocess_edstays(edstays)
         pbar.update(1)
         
-        pbar.set_description(f"[9/10] {steps[8]}")
+        pbar.set_description(f"{steps[8]}")
         hosp_master = merge_hosp_to_ed(admissions_processed, patients_processed, 
                                         hosp_diagnosis_cleaned, icustays_agg, 
                                         edstays_cleaned, ed_diagnosis_cleaned)
         pbar.update(1)
         
-        pbar.set_description(f"[10/10] {steps[9]}")
+        pbar.set_description(f"{steps[9]}")
         master_clinical_encounters = clean_master_df(hosp_master)
         pbar.update(1)
         

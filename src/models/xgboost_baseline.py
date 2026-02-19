@@ -152,26 +152,6 @@ def extract_earliest_ecg_per_stay(ecg_records_df):
     return earliest_ecg_per_stay
 
 
-def preprocess_vitals(ed_vitals):
-    """
-    Forward fill vital signs within each patient stay.
-    
-    Args:
-        ed_vitals: Raw ED vitals DataFrame
-        
-    Returns:
-        DataFrame with forward-filled vital signs
-    """
-    cols_to_fill = ['temperature', 'heartrate', 'resprate', 'o2sat', 'sbp', 'dbp']
-    
-    ed_vitals = ed_vitals.copy()
-    ed_vitals[cols_to_fill] = ed_vitals.groupby(
-        ['subject_id', 'stay_id']
-    )[cols_to_fill].ffill()
-    
-    return ed_vitals
-
-
 def aggregate_vitals_to_ecg_time(
     ed_vitals,
     earliest_ecgs,
@@ -687,7 +667,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
         "Getting earliest ECGs per stay",
-        "Preprocessing & aggregating vitals",
+        "Aggregating vitals to ECG time",
         "Creating model dataframe",
         "Preparing features",
         "Creating train/test split",
@@ -702,7 +682,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/9] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         # Override config with command-line argument if provided
         if target_type is not None:
@@ -714,38 +694,37 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
         pbar.update(1)
         
-        pbar.set_description(f"[2/9] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         ed_encounters = filter_ed_encounters(clinical_encounters)
         ed_ecg_records = filter_ed_ecg_records(ecg_records)
         pbar.update(1)
         
-        pbar.set_description(f"[3/9] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
         pbar.update(1)
         
-        pbar.set_description(f"[4/9] {steps[3]}")
-        preprocessed_vitals = preprocess_vitals(ed_vitals)
-        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(preprocessed_vitals, earliest_ecgs, agg_window_hours=4.0)
+        pbar.set_description(f"{steps[3]}")
+        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
         pbar.update(1)
         
-        pbar.set_description(f"[5/9] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
         pbar.update(1)
         
-        pbar.set_description(f"[6/9] {steps[5]}")
+        pbar.set_description(f"{steps[5]}")
         # Use target_type that was already set from args or config
         X, y, y_features, output_prefix = prepare_model_features(model_df, ed_ecg_records, target_type=target_type)
         pbar.update(1)
         
-        pbar.set_description(f"[7/9] {steps[6]}")
+        pbar.set_description(f"{steps[6]}")
         X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
         pbar.update(1)
         
-        pbar.set_description(f"[8/9] {steps[7]}")
+        pbar.set_description(f"{steps[7]}")
         multi_xgb = train_xgboost_model(X_train, y_train)
         pbar.update(1)
         
-        pbar.set_description(f"[9/9] {steps[8]}")
+        pbar.set_description(f"{steps[8]}")
         pbar.update(1)
         pbar.close()  # Close progress bar before evaluation prints output
         

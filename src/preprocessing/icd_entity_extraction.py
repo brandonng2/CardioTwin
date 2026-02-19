@@ -138,23 +138,23 @@ def run_entity_extraction(in_dir, config_path, out_path):
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/5] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         pbar.update(1)
 
-        pbar.set_description(f"[2/5] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         clinical_encounter = load_clinical_data(in_dir, config)
         pbar.update(1)
 
-        pbar.set_description(f"[3/5] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
         pbar.update(1)
 
-        pbar.set_description(f"[4/5] {steps[3]}")
+        pbar.set_description(f"{steps[3]}")
         clinical_encounter['labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
         pbar.update(1)
 
-        pbar.set_description(f"[5/5] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         clinical_encounter_extracted = onehot_labels(clinical_encounter)
         pbar.update(1)
         

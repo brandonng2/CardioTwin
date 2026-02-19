@@ -285,32 +285,32 @@ def run_ecg_preprocessing(in_dir, config_path, out_path):
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/7] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         pbar.update(1)
 
-        pbar.set_description(f"[2/7] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         processed_dir = Path(config["paths"]["processed_dir"])
         ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, processed_dir, config)
         pbar.update(1)
 
-        pbar.set_description(f"[3/7] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
         pbar.update(1)
         
-        pbar.set_description(f"[4/7] {steps[3]}")
+        pbar.set_description(f"{steps[3]}")
         final_machine_measurements = apply_phrase_labels(cleaned_machine_measurements)
         pbar.update(1)
 
-        pbar.set_description(f"[5/7] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         merged = match_ecg_to_encounters(ecg_record, clinical_encounters)
         pbar.update(1)
         
-        pbar.set_description(f"[6/7] {steps[5]}")
+        pbar.set_description(f"{steps[5]}")
         final_ecg_record_list = add_icu_indicator(merged)
         pbar.update(1)
 
-        pbar.set_description(f"[7/7] {steps[6]}")
+        pbar.set_description(f"{steps[6]}")
         master_ecg = final_ecg_record_list.merge(
             final_machine_measurements, 
             on=['subject_id', 'study_id', 'ecg_time'], 

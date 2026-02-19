@@ -5,7 +5,7 @@
     },
     "sources": {
         "clinical_encounters": "clinical_encounters_extracted.csv",
-        "vitals": "ed_vitals.csv",
+        "vitals": "vitals_data.csv",
         "ecg_records": "ecg_data.csv"
     }
 }
