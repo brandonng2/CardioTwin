@@ -9,6 +9,7 @@ import sys
 from tqdm import tqdm
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import GroupShuffleSplit
+from src.preprocessing.icd_code_labels import cardiovascular_labels
 from sklearn.metrics import (
     roc_auc_score, 
     average_precision_score,
@@ -294,20 +295,6 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
 def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
     """
     Prepare feature matrix X and target matrix y for modeling.
-    
-    Args:
-        model_df: Combined model DataFrame
-        ed_ecg_records: ED ECG records with machine measurements
-        target_type: Type of target to predict - 'labels' or 'reports'
-                    - 'labels': Predict ICD diagnosis labels (label_*)
-                    - 'reports': Predict ECG machine measurement reports (report_*)
-        
-    Returns:
-        Tuple of (X, y, y_features, output_prefix) where:
-            X: Feature matrix
-            y: Target matrix
-            y_features: List of target column names
-            output_prefix: Prefix for output files
     """
     model_df_encoded = pd.get_dummies(model_df, columns=['race', 'gender'], drop_first=True)
 
@@ -323,8 +310,10 @@ def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
     )]
     
     # Get label columns
-    label_cols = [col for col in model_df_encoded.columns if col.startswith('label_')]
-
+    # label_cols = [col for col in model_df_encoded.columns if col.startswith('label_')]
+    label_cols = [col for col in model_df_encoded.columns if col.startswith('label_') and any(
+    cv_label in col for cv_label in cardiovascular_labels.keys())]
+    
     demo_features = ['anchor_age'] + [c for c in model_df_encoded.columns if c.startswith(('race_', 'gender_'))]
 
     # Determine features and targets based on target_type
@@ -384,19 +373,49 @@ def create_train_test_set(model_df, X, y, test_size=0.2, random_state=42):
     
     return X_train, X_test, y_train, y_test
 
+def compute_scale_pos_weights(y_train):
+    """
+    Compute per-label scale_pos_weight for XGBoost class-weighted loss.
+    scale_pos_weight = n_negative / n_positive for each label.
+    Handles edge cases where a label has no positive examples.
+    """
+    weights = {}
+    for col in y_train.columns:
+        n_pos = y_train[col].sum()
+        n_neg = len(y_train) - n_pos
+        if n_pos == 0:
+            weights[col] = 1.0  # no positive examples, weight is irrelevant
+        else:
+            weights[col] = n_neg / n_pos
+    return weights
+
 
 def train_xgboost_model(X_train, y_train):
-    """Train XGBoost multi-output classifier."""
-    xgb_clf = XGBClassifier(
-        n_estimators=100,
-        max_depth=5,
-        learning_rate=0.1,
-        eval_metric='logloss',
-        random_state=42
-    )
+    """
+    Train XGBoost multi-output classifier with per-label class-weighted loss.
+    """
+    scale_pos_weights = compute_scale_pos_weights(y_train)
     
-    multi_xgb = MultiOutputClassifier(xgb_clf, n_jobs=-1)
-    multi_xgb.fit(X_train, y_train)
+    estimators = []
+    for col in y_train.columns:
+        clf = XGBClassifier(
+            n_estimators=100,
+            max_depth=5,
+            learning_rate=0.1,
+            eval_metric='logloss',
+            scale_pos_weight=scale_pos_weights[col],  # per-label class weight
+            random_state=42
+        )
+        clf.fit(X_train, y_train[col])
+        estimators.append(clf)
+        
+    # Wrap in MultiOutputClassifier shell so the rest of the pipeline works unchanged
+    multi_xgb = MultiOutputClassifier(
+        XGBClassifier(),  # placeholder base — estimators_ is overridden below
+        n_jobs=-1
+    )
+    multi_xgb.estimators_ = estimators
+    multi_xgb.n_outputs_ = len(estimators)
     
     return multi_xgb
 
@@ -663,15 +682,6 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
     """
     Main XGBoost baseline pipeline with progress tracking.
     
-    Args:
-        in_dir: Input directory path
-        config_path: Path to configuration JSON file
-        out_path: Output directory path
-        target_type: Override for prediction target ('labels' or 'reports').
-                    If None, uses value from config file (defaults to 'labels')
-    
-    Returns:
-        results_df: DataFrame with performance metrics
     """
     steps = [
         "Loading configuration & data",
