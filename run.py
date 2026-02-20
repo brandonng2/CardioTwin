@@ -1,7 +1,7 @@
 import json
 import argparse
 from pathlib import Path
-#change baseline vs baseline2 depending on what model you are running!
+from src.models.mlp import run_mlp_baseline_pipeline
 from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
@@ -102,27 +102,56 @@ def run_xgboost_baseline(args):
     run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 
+# def run_mlp_baseline(args):
+#     """Run MLP baseline model."""
+#     print("\n" + "=" * 60)
+#     print("MLP BASELINE MODEL")
+#     print("=" * 60)
+
+#     config_path = "configs/mlp_params.json"
+#     config = load_config(config_path)
+#     in_dir = Path(config["paths"]["in_dir"])
+#     out_path = Path(config["paths"]["out_dir"])
+
+#     target_type = None
+#     if hasattr(args, "mlp_target") and args.mlp_target and args.mlp_target != "default":
+#         target_mapping = {
+#             "diagnosis": "labels",
+#             "label": "labels",
+#             "labels": "labels",
+#             "report": "reports",
+#             "reports": "reports",
+#         }
+#         target_type = target_mapping.get(args.mlp_target.lower())
+
+#     run_mlp_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Run everything
-  python run.py --all
-  
-  # Run specific steps
-  python run.py --static --ecg
-  python run.py --ecg
-  
-  # Run everything except certain steps
-  python run.py --all --skip-static
-  
-  # Run XGBoost with specific target
-  python run.py --xgbaseline label      # Predict diagnosis labels (default)
-  python run.py --xgbaseline report     # Predict ECG reports
-  python run.py --xgbaseline            # Use config default
-        """
+            Examples:
+            # Run everything
+            python run.py --all
+            
+            # Run specific steps
+            python run.py --static --ecg
+            python run.py --ecg
+            
+            # Run everything except certain steps
+            python run.py --all --skip-static
+            
+            # Run XGBoost with specific target
+            python run.py --xgbaseline label      # Predict diagnosis labels (default)
+            python run.py --xgbaseline report     # Predict ECG reports
+            python run.py --xgbaseline            # Use config default
+
+            # Run MLP baseline
+            python run.py --mlpbaseline           # Use config default (labels)
+            python run.py --mlpbaseline report    # Predict ECG reports
+    """
     )
     
     # Run specific components
@@ -132,19 +161,24 @@ Examples:
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
     parser.add_argument("--xgbaseline", nargs='?', const='default', dest='xgb_target',
-                       help="Run XGBoost baseline model. Optional: 'label' (default) or 'report'")
-    
+                        help="Run XGBoost baseline model. Optional: 'label' (default) or 'report'")
+    # parser.add_argument("--mlpbaseline", nargs='?', const='default', dest='mlp_target',
+    #                     help="Run MLP baseline model.")
+
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
     parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
     parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
     parser.add_argument("--skip-xgbaseline", action="store_true", help="Skip XGBoost baseline model")
+    # parser.add_argument("--skip-mlpbaseline", action="store_true", help="Skip MLP baseline model")
 
     args = parser.parse_args()
     
     # Determine what to run
-    run_all = args.all or not any([args.static, args.ecg, args.vitals, args.entities, args.xgb_target])
+    run_all = args.all or not any([
+        args.static, args.ecg, args.vitals, args.entities, args.xgb_target
+    ])
     
     print("=" * 60)
     print("MIMIC-IV PREPROCESSING PIPELINE")
@@ -173,6 +207,10 @@ Examples:
     # XGBoost Baseline Model
     if (run_all and not args.skip_xgbaseline) or args.xgb_target:
         run_xgboost_baseline(args)
+
+    # MLP Baseline Model
+    # if (run_all and not args.skip_mlpbaseline) or args.mlp_target:
+    #     run_mlp_baseline(args)
 
 
 if __name__ == "__main__":

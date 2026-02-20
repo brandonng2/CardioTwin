@@ -1,4 +1,5 @@
 import json
+import ast
 import os
 from pathlib import Path
 import numpy as np
@@ -39,13 +40,6 @@ def load_config(config_path):
 def load_data_files(in_dir, config):
     """
     Load all required data files based on configuration.
-    
-    Args:
-        in_dir: Input directory path
-        config: Configuration dictionary
-        
-    Returns:
-        Tuple of DataFrames: (ed_vitals, clinical_encounters, ecg_records)
     """
     ed_vitals = pd.read_csv(os.path.join(in_dir, config["sources"]["vitals"]))
     
@@ -63,13 +57,6 @@ def load_data_files(in_dir, config):
 def filter_label_columns(df, prefix: str = "label_"):
     """
     Remove label columns that have zero positive cases.
-    
-    Args:
-        df: Input DataFrame
-        prefix: Prefix to identify label columns
-        
-    Returns:
-        DataFrame with zero-sum label columns removed
     """
     label_cols = [col for col in df.columns if prefix in col]
     
@@ -240,6 +227,7 @@ def aggregate_vitals_to_ecg_time(
     return result
 
 
+
 def create_model_df(ed_encounters, ecg_aggregate_vitals):
     """
     Merge ED encounters with ECG and vital signs data.
@@ -254,70 +242,85 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
     # Ensure consistent data types for merge keys
     ecg_aggregate_vitals = ecg_aggregate_vitals.copy()
     ed_encounters = ed_encounters.copy()
-    
-    # Convert subject_id to int in both dataframes
-    ecg_aggregate_vitals['subject_id'] = pd.to_numeric(ecg_aggregate_vitals['subject_id'], errors='coerce').astype('Int64')
-    ed_encounters['subject_id'] = pd.to_numeric(ed_encounters['subject_id'], errors='coerce').astype('Int64')
-    
-    # Convert ed_stay_id to int in both dataframes
-    ecg_aggregate_vitals['ed_stay_id'] = pd.to_numeric(ecg_aggregate_vitals['ed_stay_id'], errors='coerce').astype('Int64')
-    ed_encounters['ed_stay_id'] = pd.to_numeric(ed_encounters['ed_stay_id'], errors='coerce').astype('Int64')
+
+    merge_keys = ['subject_id', 'ed_stay_id', 'hadm_id', 'icu_stay_id']
+
+    for key in merge_keys:
+        ecg_aggregate_vitals[key] = pd.to_numeric(ecg_aggregate_vitals[key], errors='coerce').astype('Int64')
+        ed_encounters[key] = pd.to_numeric(ed_encounters[key], errors='coerce').astype('Int64')
     
     model_df = ecg_aggregate_vitals.merge(
         ed_encounters,
-        on=['subject_id', 'ed_stay_id'],
+        on=merge_keys,
         how='inner'
     )
     
     return model_df
 
+def onehot_labels(df, label_column='labels', prefix='label_'):
+    """
+    One-hot encode a label column containing lists (or string representations of lists).
+    """
+    # Parse string representations of lists if needed
+    df[label_column] = df[label_column].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+    )
 
-def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
+    # Get all unique labels across all rows
+    all_labels = sorted({label for labels_list in df[label_column] if isinstance(labels_list, list) for label in labels_list})
+
+    # Create one-hot encoded columns
+    onehot_df = pd.DataFrame(
+        {f'{prefix}{label}': df[label_column].apply(lambda x: int(isinstance(x, list) and label in x)) for label in all_labels},
+        index=df.index
+    )
+
+    return pd.concat([df, onehot_df], axis=1)
+
+def prepare_model_features(model_df, target_type='labels'):
     """
     Prepare feature matrix X and target matrix y for modeling.
     """
+    # One-hot encode full_report and diagnosis_labels
+    model_df = onehot_labels(model_df, label_column='full_report', prefix='report_')
+    model_df = onehot_labels(model_df, label_column='diagnosis_labels', prefix='label_')
+
     model_df_encoded = pd.get_dummies(model_df, columns=['race', 'gender'], drop_first=True)
 
-    ecg_features = ['rr_interval','p_onset', 'p_end','qrs_onset', 'qrs_end',
-    't_end','p_axis', 'qrs_axis', 't_axis', 'qrs_duration', 'pr_interval', 'qt_proxy']
+    ecg_features = ['rr_interval', 'p_onset', 'p_end', 'qrs_onset', 'qrs_end',
+                    't_end', 'p_axis', 'qrs_axis', 't_axis', 'qrs_duration', 'pr_interval', 'qt_proxy']
 
     # Get machine measurement columns
-    machine_cols = [col for col in ed_ecg_records.columns if col.startswith('report_')]
-    
+    machine_cols = [col for col in model_df_encoded.columns if col.startswith('report_')]
+
     # Get vital sign features
     vital_features = [col for col in model_df_encoded.columns if any(
         keyword in col for keyword in ['_mean', '_std', '_min', '_max', '_closest', 'vitals_time_before_ecg']
     )]
-    
+
     # Get label columns
-    # label_cols = [col for col in model_df_encoded.columns if col.startswith('label_')]
     label_cols = [col for col in model_df_encoded.columns if col.startswith('label_') and any(
-    cv_label in col for cv_label in cardiovascular_labels.keys())]
-    
+        cv_label in col for cv_label in cardiovascular_labels.keys())]
+
     demo_features = ['anchor_age'] + [c for c in model_df_encoded.columns if c.startswith(('race_', 'gender_'))]
 
-    # Determine features and targets based on target_type
     if target_type == 'labels':
-        # Predict labels using machine reports + vital + demo as features
         X_features = machine_cols + vital_features + demo_features + ecg_features
         y_features = label_cols
         output_prefix = 'diagnosis'
     elif target_type == 'reports':
-        # Predict machine reports using vitals + demo as features
         X_features = vital_features + demo_features + ecg_features
         y_features = machine_cols
         output_prefix = 'ecg_report'
     else:
         raise ValueError(f"target_type must be 'labels' or 'reports', got '{target_type}'")
-    
-    # Create feature and target matrices
+
     X = model_df_encoded[X_features].copy()
     y = model_df_encoded[y_features].copy()
-    
-    # Convert to numeric
+
     X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
     y = y.apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
-    
+
     return X, y, y_features, output_prefix
 
 
@@ -713,7 +716,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"{steps[5]}")
         # Use target_type that was already set from args or config
-        X, y, y_features, output_prefix = prepare_model_features(model_df, ed_ecg_records, target_type=target_type)
+        X, y, y_features, output_prefix = prepare_model_features(model_df, target_type=target_type)
         pbar.update(1)
         
         pbar.set_description(f"{steps[6]}")
