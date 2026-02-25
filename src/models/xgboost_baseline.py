@@ -1,4 +1,5 @@
 import json
+import ast
 import os
 from pathlib import Path
 import numpy as np
@@ -9,6 +10,7 @@ import sys
 from tqdm import tqdm
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import GroupShuffleSplit
+from src.preprocessing.icd_code_labels import cardiovascular_labels
 from sklearn.metrics import (
     roc_auc_score, 
     average_precision_score,
@@ -38,13 +40,6 @@ def load_config(config_path):
 def load_data_files(in_dir, config):
     """
     Load all required data files based on configuration.
-    
-    Args:
-        in_dir: Input directory path
-        config: Configuration dictionary
-        
-    Returns:
-        Tuple of DataFrames: (ed_vitals, clinical_encounters, ecg_records)
     """
     ed_vitals = pd.read_csv(os.path.join(in_dir, config["sources"]["vitals"]))
     
@@ -62,13 +57,6 @@ def load_data_files(in_dir, config):
 def filter_label_columns(df, prefix: str = "label_"):
     """
     Remove label columns that have zero positive cases.
-    
-    Args:
-        df: Input DataFrame
-        prefix: Prefix to identify label columns
-        
-    Returns:
-        DataFrame with zero-sum label columns removed
     """
     label_cols = [col for col in df.columns if prefix in col]
     
@@ -149,26 +137,6 @@ def extract_earliest_ecg_per_stay(ecg_records_df):
     earliest_ecg_per_stay['qt_proxy'] = earliest_ecg_per_stay['t_end'] - earliest_ecg_per_stay['qrs_onset']
         
     return earliest_ecg_per_stay
-
-
-def preprocess_vitals(ed_vitals):
-    """
-    Forward fill vital signs within each patient stay.
-    
-    Args:
-        ed_vitals: Raw ED vitals DataFrame
-        
-    Returns:
-        DataFrame with forward-filled vital signs
-    """
-    cols_to_fill = ['temperature', 'heartrate', 'resprate', 'o2sat', 'sbp', 'dbp']
-    
-    ed_vitals = ed_vitals.copy()
-    ed_vitals[cols_to_fill] = ed_vitals.groupby(
-        ['subject_id', 'stay_id']
-    )[cols_to_fill].ffill()
-    
-    return ed_vitals
 
 
 def aggregate_vitals_to_ecg_time(
@@ -259,6 +227,7 @@ def aggregate_vitals_to_ecg_time(
     return result
 
 
+
 def create_model_df(ed_encounters, ecg_aggregate_vitals):
     """
     Merge ED encounters with ECG and vital signs data.
@@ -273,82 +242,85 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
     # Ensure consistent data types for merge keys
     ecg_aggregate_vitals = ecg_aggregate_vitals.copy()
     ed_encounters = ed_encounters.copy()
-    
-    # Convert subject_id to int in both dataframes
-    ecg_aggregate_vitals['subject_id'] = pd.to_numeric(ecg_aggregate_vitals['subject_id'], errors='coerce').astype('Int64')
-    ed_encounters['subject_id'] = pd.to_numeric(ed_encounters['subject_id'], errors='coerce').astype('Int64')
-    
-    # Convert ed_stay_id to int in both dataframes
-    ecg_aggregate_vitals['ed_stay_id'] = pd.to_numeric(ecg_aggregate_vitals['ed_stay_id'], errors='coerce').astype('Int64')
-    ed_encounters['ed_stay_id'] = pd.to_numeric(ed_encounters['ed_stay_id'], errors='coerce').astype('Int64')
+
+    merge_keys = ['subject_id', 'ed_stay_id', 'hadm_id', 'icu_stay_id']
+
+    for key in merge_keys:
+        ecg_aggregate_vitals[key] = pd.to_numeric(ecg_aggregate_vitals[key], errors='coerce').astype('Int64')
+        ed_encounters[key] = pd.to_numeric(ed_encounters[key], errors='coerce').astype('Int64')
     
     model_df = ecg_aggregate_vitals.merge(
         ed_encounters,
-        on=['subject_id', 'ed_stay_id'],
+        on=merge_keys,
         how='inner'
     )
     
     return model_df
 
+def onehot_labels(df, label_column='labels', prefix='label_'):
+    """
+    One-hot encode a label column containing lists (or string representations of lists).
+    """
+    # Parse string representations of lists if needed
+    df[label_column] = df[label_column].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+    )
 
-def prepare_model_features(model_df, ed_ecg_records, target_type='labels'):
+    # Get all unique labels across all rows
+    all_labels = sorted({label for labels_list in df[label_column] if isinstance(labels_list, list) for label in labels_list})
+
+    # Create one-hot encoded columns
+    onehot_df = pd.DataFrame(
+        {f'{prefix}{label}': df[label_column].apply(lambda x: int(isinstance(x, list) and label in x)) for label in all_labels},
+        index=df.index
+    )
+
+    return pd.concat([df, onehot_df], axis=1)
+
+def prepare_model_features(model_df, target_type='labels'):
     """
     Prepare feature matrix X and target matrix y for modeling.
-    
-    Args:
-        model_df: Combined model DataFrame
-        ed_ecg_records: ED ECG records with machine measurements
-        target_type: Type of target to predict - 'labels' or 'reports'
-                    - 'labels': Predict ICD diagnosis labels (label_*)
-                    - 'reports': Predict ECG machine measurement reports (report_*)
-        
-    Returns:
-        Tuple of (X, y, y_features, output_prefix) where:
-            X: Feature matrix
-            y: Target matrix
-            y_features: List of target column names
-            output_prefix: Prefix for output files
     """
+    # One-hot encode full_report and diagnosis_labels
+    model_df = onehot_labels(model_df, label_column='full_report', prefix='report_')
+    model_df = onehot_labels(model_df, label_column='diagnosis_labels', prefix='label_')
+
     model_df_encoded = pd.get_dummies(model_df, columns=['race', 'gender'], drop_first=True)
 
-    ecg_features = ['rr_interval','p_onset', 'p_end','qrs_onset', 'qrs_end',
-    't_end','p_axis', 'qrs_axis', 't_axis', 'qrs_duration', 'pr_interval', 'qt_proxy']
+    ecg_features = ['rr_interval', 'p_onset', 'p_end', 'qrs_onset', 'qrs_end',
+                    't_end', 'p_axis', 'qrs_axis', 't_axis', 'qrs_duration', 'pr_interval', 'qt_proxy']
 
     # Get machine measurement columns
-    machine_cols = [col for col in ed_ecg_records.columns if col.startswith('report_')]
-    
+    machine_cols = [col for col in model_df_encoded.columns if col.startswith('report_')]
+
     # Get vital sign features
     vital_features = [col for col in model_df_encoded.columns if any(
         keyword in col for keyword in ['_mean', '_std', '_min', '_max', '_closest', 'vitals_time_before_ecg']
     )]
-    
+
     # Get label columns
-    label_cols = [col for col in model_df_encoded.columns if col.startswith('label_')]
+    label_cols = [col for col in model_df_encoded.columns if col.startswith('label_') and any(
+        cv_label in col for cv_label in cardiovascular_labels.keys())]
 
     demo_features = ['anchor_age'] + [c for c in model_df_encoded.columns if c.startswith(('race_', 'gender_'))]
 
-    # Determine features and targets based on target_type
     if target_type == 'labels':
-        # Predict labels using machine reports + vital + demo as features
         X_features = machine_cols + vital_features + demo_features + ecg_features
         y_features = label_cols
         output_prefix = 'diagnosis'
     elif target_type == 'reports':
-        # Predict machine reports using vitals + demo as features
         X_features = vital_features + demo_features + ecg_features
         y_features = machine_cols
         output_prefix = 'ecg_report'
     else:
         raise ValueError(f"target_type must be 'labels' or 'reports', got '{target_type}'")
-    
-    # Create feature and target matrices
+
     X = model_df_encoded[X_features].copy()
     y = model_df_encoded[y_features].copy()
-    
-    # Convert to numeric
+
     X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
     y = y.apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
-    
+
     return X, y, y_features, output_prefix
 
 
@@ -384,19 +356,49 @@ def create_train_test_set(model_df, X, y, test_size=0.2, random_state=42):
     
     return X_train, X_test, y_train, y_test
 
+def compute_scale_pos_weights(y_train):
+    """
+    Compute per-label scale_pos_weight for XGBoost class-weighted loss.
+    scale_pos_weight = n_negative / n_positive for each label.
+    Handles edge cases where a label has no positive examples.
+    """
+    weights = {}
+    for col in y_train.columns:
+        n_pos = y_train[col].sum()
+        n_neg = len(y_train) - n_pos
+        if n_pos == 0:
+            weights[col] = 1.0  # no positive examples, weight is irrelevant
+        else:
+            weights[col] = n_neg / n_pos
+    return weights
+
 
 def train_xgboost_model(X_train, y_train):
-    """Train XGBoost multi-output classifier."""
-    xgb_clf = XGBClassifier(
-        n_estimators=100,
-        max_depth=5,
-        learning_rate=0.1,
-        eval_metric='logloss',
-        random_state=42
-    )
+    """
+    Train XGBoost multi-output classifier with per-label class-weighted loss.
+    """
+    scale_pos_weights = compute_scale_pos_weights(y_train)
     
-    multi_xgb = MultiOutputClassifier(xgb_clf, n_jobs=-1)
-    multi_xgb.fit(X_train, y_train)
+    estimators = []
+    for col in y_train.columns:
+        clf = XGBClassifier(
+            n_estimators=100,
+            max_depth=5,
+            learning_rate=0.1,
+            eval_metric='logloss',
+            scale_pos_weight=scale_pos_weights[col],  # per-label class weight
+            random_state=42
+        )
+        clf.fit(X_train, y_train[col])
+        estimators.append(clf)
+        
+    # Wrap in MultiOutputClassifier shell so the rest of the pipeline works unchanged
+    multi_xgb = MultiOutputClassifier(
+        XGBClassifier(),  # placeholder base — estimators_ is overridden below
+        n_jobs=-1
+    )
+    multi_xgb.estimators_ = estimators
+    multi_xgb.n_outputs_ = len(estimators)
     
     return multi_xgb
 
@@ -663,21 +665,12 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
     """
     Main XGBoost baseline pipeline with progress tracking.
     
-    Args:
-        in_dir: Input directory path
-        config_path: Path to configuration JSON file
-        out_path: Output directory path
-        target_type: Override for prediction target ('labels' or 'reports').
-                    If None, uses value from config file (defaults to 'labels')
-    
-    Returns:
-        results_df: DataFrame with performance metrics
     """
     steps = [
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
         "Getting earliest ECGs per stay",
-        "Preprocessing & aggregating vitals",
+        "Aggregating vitals to ECG time",
         "Creating model dataframe",
         "Preparing features",
         "Creating train/test split",
@@ -692,7 +685,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/9] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         # Override config with command-line argument if provided
         if target_type is not None:
@@ -704,38 +697,37 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
         pbar.update(1)
         
-        pbar.set_description(f"[2/9] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         ed_encounters = filter_ed_encounters(clinical_encounters)
         ed_ecg_records = filter_ed_ecg_records(ecg_records)
         pbar.update(1)
         
-        pbar.set_description(f"[3/9] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
         pbar.update(1)
         
-        pbar.set_description(f"[4/9] {steps[3]}")
-        preprocessed_vitals = preprocess_vitals(ed_vitals)
-        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(preprocessed_vitals, earliest_ecgs, agg_window_hours=4.0)
+        pbar.set_description(f"{steps[3]}")
+        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
         pbar.update(1)
         
-        pbar.set_description(f"[5/9] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
         pbar.update(1)
         
-        pbar.set_description(f"[6/9] {steps[5]}")
+        pbar.set_description(f"{steps[5]}")
         # Use target_type that was already set from args or config
-        X, y, y_features, output_prefix = prepare_model_features(model_df, ed_ecg_records, target_type=target_type)
+        X, y, y_features, output_prefix = prepare_model_features(model_df, target_type=target_type)
         pbar.update(1)
         
-        pbar.set_description(f"[7/9] {steps[6]}")
+        pbar.set_description(f"{steps[6]}")
         X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
         pbar.update(1)
         
-        pbar.set_description(f"[8/9] {steps[7]}")
+        pbar.set_description(f"{steps[7]}")
         multi_xgb = train_xgboost_model(X_train, y_train)
         pbar.update(1)
         
-        pbar.set_description(f"[9/9] {steps[8]}")
+        pbar.set_description(f"{steps[8]}")
         pbar.update(1)
         pbar.close()  # Close progress bar before evaluation prints output
         

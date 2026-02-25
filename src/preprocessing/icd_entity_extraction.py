@@ -80,45 +80,8 @@ def map_codes_to_labels(icd_codes):
     
     return labels
 
-
-def onehot_labels(df, label_column='labels', prefix='label_'):
-    """
-    One-hot encode the labels column into separate binary columns.
-    Also creates summary columns for cardiovascular conditions.
-    """
-    # Get all unique labels across all rows
-    all_labels = set()
-    for labels_list in df[label_column]:
-        if isinstance(labels_list, list):
-            all_labels.update(labels_list)
-    
-    # Sort labels for consistent column ordering
-    all_labels = sorted(all_labels)
-    
-    # Create one-hot encoded columns
-    onehot_data = {}
-    for label in all_labels:
-        onehot_data[f'{prefix}{label}'] = df[label_column].apply(
-            lambda x: 1 if isinstance(x, list) and label in x else 0
-        )
-    
-    # Add one-hot columns to original dataframe
-    onehot_df = pd.DataFrame(onehot_data, index=df.index)
-    result = pd.concat([df, onehot_df], axis=1)
-    
-    # Create is_cardiovascular column - 1 if has any CV label (including unspecified)
-    result['is_cardiovascular'] = result[label_column].apply(
-        lambda x: 1 if isinstance(x, list) and len(x) > 0 and 
-        any(label not in noncardiovascular_labels for label in x) else 0
-    )
-    
-    # Create is_specified_cardiac column - 1 if has specific cardiac diagnosis (not just unspecified)
-    result['is_specified_cardiac'] = result[label_column].apply(
-        lambda x: 1 if isinstance(x, list) and len(x) > 0 and 
-        any(label in cardiovascular_labels and label != 'unspecified_cardiac' for label in x) else 0
-    )
-    
-    return result
+def is_cardiovascular_encounter(labels):
+    return any(label in cardiovascular_labels for label in labels)
 
 
 def run_entity_extraction(in_dir, config_path, out_path):
@@ -128,7 +91,6 @@ def run_entity_extraction(in_dir, config_path, out_path):
         "Loading clinical data",
         "Cleaning ICD codes",
         "Extracting cardiovascular labels",
-        "One-hot encoding labels"
     ]
     
     print("Running ICD Code Extraction...")
@@ -138,24 +100,22 @@ def run_entity_extraction(in_dir, config_path, out_path):
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/5] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         pbar.update(1)
 
-        pbar.set_description(f"[2/5] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         clinical_encounter = load_clinical_data(in_dir, config)
         pbar.update(1)
 
-        pbar.set_description(f"[3/5] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         clinical_encounter['icd_codes'] = clinical_encounter['icd_codes'].apply(clean_icd_codes)
         pbar.update(1)
 
-        pbar.set_description(f"[4/5] {steps[3]}")
-        clinical_encounter['labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
-        pbar.update(1)
+        pbar.set_description(f"{steps[3]}")
+        clinical_encounter['diagnosis_labels'] = clinical_encounter['icd_codes'].apply(map_codes_to_labels)
+        clinical_encounter['is_cardiovascular'] = clinical_encounter['diagnosis_labels'].apply(is_cardiovascular_encounter)
 
-        pbar.set_description(f"[5/5] {steps[4]}")
-        clinical_encounter_extracted = onehot_labels(clinical_encounter)
         pbar.update(1)
         
     finally:
@@ -163,12 +123,12 @@ def run_entity_extraction(in_dir, config_path, out_path):
 
     print()
     print("-" * 60)
-    print(f"Final dataset shape: {clinical_encounter_extracted.shape}")
-    print(f"Number of columns: {len(clinical_encounter_extracted.columns)}")
+    print(f"Final dataset shape: {clinical_encounter.shape}")
+    print(f"Number of columns: {len(clinical_encounter.columns)}")
     print(f"Saving to {out_path}...")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    clinical_encounter_extracted.to_csv(out_path, index=False)
+    clinical_encounter.to_csv(out_path, index=False)
     print("✓ Clinical entity extraction complete!")
     print("-" * 60)
 
-    return clinical_encounter_extracted
+    return clinical_encounter

@@ -73,9 +73,11 @@ def preprocess_ecg_reports(df):
     # Standardize column types
     df = clean_cols_types(df)
 
-    # Clean each report column in place
+    # Clean each report column in place, ignoring 'na' strings
     for col in report_cols:
-        df[col] = df[col].astype("string").apply(lambda x: clean_report_text(x))
+        df[col] = df[col].astype("string").apply(
+            lambda x: clean_report_text(x) if str(x).strip().lower() not in ("na", "nan", "<na>") else pd.NA
+        )
 
     # Flatten report columns into a single list column
     df = flatten_columns(df, report_cols, output_col="full_report")
@@ -88,6 +90,27 @@ def preprocess_ecg_reports(df):
     df = df.reset_index(drop=True)
 
     return df
+
+def map_reports_to_labels(report_list):
+    """
+    Map ECG report strings to condition labels.
+    Returns 'unspecified_ecg' only if no labels are matched.
+    """
+    if not isinstance(report_list, list):
+        return []
+
+    labels = set()
+
+    for label, phrases in report_label_map.items():
+        for report in report_list:
+            if any(phrase in report for phrase in phrases):
+                labels.add(label)
+                break
+
+    if not labels:
+        return ["unspecified_ecg"]
+
+    return sorted(labels)
 
 
 def clean_report_text(s):
@@ -102,25 +125,6 @@ def clean_report_text(s):
     s = re.sub(r'[^a-z\s]', '', s)
     s = re.sub(r'\s+', ' ', s)
     return s.strip()
-
-
-def apply_phrase_labels(df):
-    """Apply binary labels to dataframe based on pattern matching."""
-    def contains_any(text, phrases):
-        """Check if text contains any of the phrases."""
-        return any(p in text for p in phrases)
-
-    # Create all label columns at once
-    label_columns = {
-        f'report_{label}': df['full_report'].apply(lambda x: contains_any(x, phrases)).astype(int)
-        for label, phrases in report_label_map.items()
-    }
-    
-    # Concatenate all new columns at once
-    new_columns = pd.DataFrame(label_columns, index=df.index)
-    df = pd.concat([df, new_columns], axis=1)
-    
-    return df
 
 
 def match_ecg_to_encounters(ecg_record_list_df, encounter_df):
@@ -285,34 +289,34 @@ def run_ecg_preprocessing(in_dir, config_path, out_path):
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}')
     
     try:
-        pbar.set_description(f"[1/7] {steps[0]}")
+        pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
         pbar.update(1)
 
-        pbar.set_description(f"[2/7] {steps[1]}")
+        pbar.set_description(f"{steps[1]}")
         processed_dir = Path(config["paths"]["processed_dir"])
         ecg_record, machine_measurements, clinical_encounters = load_ecg_data(in_dir, processed_dir, config)
         pbar.update(1)
 
-        pbar.set_description(f"[3/7] {steps[2]}")
+        pbar.set_description(f"{steps[2]}")
         cleaned_machine_measurements = preprocess_ecg_reports(machine_measurements)
         pbar.update(1)
         
-        pbar.set_description(f"[4/7] {steps[3]}")
-        final_machine_measurements = apply_phrase_labels(cleaned_machine_measurements)
+        pbar.set_description(f"{steps[3]}")
+        cleaned_machine_measurements["full_report"] = cleaned_machine_measurements["full_report"].apply(map_reports_to_labels)
         pbar.update(1)
 
-        pbar.set_description(f"[5/7] {steps[4]}")
+        pbar.set_description(f"{steps[4]}")
         merged = match_ecg_to_encounters(ecg_record, clinical_encounters)
         pbar.update(1)
         
-        pbar.set_description(f"[6/7] {steps[5]}")
+        pbar.set_description(f"{steps[5]}")
         final_ecg_record_list = add_icu_indicator(merged)
         pbar.update(1)
 
-        pbar.set_description(f"[7/7] {steps[6]}")
+        pbar.set_description(f"{steps[6]}")
         master_ecg = final_ecg_record_list.merge(
-            final_machine_measurements, 
+            cleaned_machine_measurements, 
             on=['subject_id', 'study_id', 'ecg_time'], 
             how='inner'
         )
