@@ -2,6 +2,7 @@ import json
 import argparse
 from pathlib import Path
 from src.models.mlp import run_mlp_baseline_pipeline
+from src.models.lstm_baseline import run_lstm_baseline_pipeline
 from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
@@ -101,6 +102,17 @@ def run_xgboost_baseline(args):
 
     run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
+def run_lstm_baseline(args):
+    print("\n" + "=" * 60)
+    print("LSTM BASELINE MODEL")
+    print("=" * 60)
+
+    config_path = "configs/xgboost_baseline_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_lstm_baseline_pipeline(in_dir, config_path, out_path)
 
 # def run_mlp_baseline(args):
 #     """Run MLP baseline model."""
@@ -162,6 +174,8 @@ def main():
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
     parser.add_argument("--xgbaseline", nargs='?', const='default', dest='xgb_target',
                         help="Run XGBoost baseline model. Optional: 'label' (default) or 'report'")
+    parser.add_argument("--lstmbaseline", action="store_true",
+                    help="Run LSTM baseline model")
     # parser.add_argument("--mlpbaseline", nargs='?', const='default', dest='mlp_target',
     #                     help="Run MLP baseline model.")
 
@@ -177,7 +191,7 @@ def main():
     
     # Determine what to run
     run_all = args.all or not any([
-        args.static, args.ecg, args.vitals, args.entities, args.xgb_target
+        args.static, args.ecg, args.vitals, args.entities, args.xgb_target, args.lstmbaseline
     ])
     
     print("=" * 60)
@@ -199,6 +213,7 @@ def main():
     # Entity extraction
     if (run_all and not args.skip_entities) or args.entities:
         run_icd_extraction(args)
+
     
     print("\n" + "=" * 60)
     print("✓ ALL PREPROCESSING COMPLETED!")
@@ -207,6 +222,10 @@ def main():
     # XGBoost Baseline Model
     if (run_all and not args.skip_xgbaseline) or args.xgb_target:
         run_xgboost_baseline(args)
+        
+    if args.lstmbaseline:
+        run_lstm_baseline(args)
+
 
     # MLP Baseline Model
     # if (run_all and not args.skip_mlpbaseline) or args.mlp_target:

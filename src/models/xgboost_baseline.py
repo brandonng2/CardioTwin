@@ -283,53 +283,107 @@ def onehot_labels(df, label_column='labels', prefix='label_'):
     return pd.concat([df, onehot_df], axis=1)
 
 #NEW
-def extract_embeddings_for_pipeline(df, config):
+import os
+import torch
+import wfdb
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from fairseq_signals.models import build_model_from_checkpoint
+
+
+import os
+import torch
+import wfdb
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from fairseq_signals.models import build_model_from_checkpoint
+
+
+def extract_embeddings_for_pipeline_batch_10s(df, config, batch_size=16):
     """
-    Computes embeddings for the 'path' column in the dataframe.
-    """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    Extracts 512-dim embeddings for 10-second ECGs by splitting into two 5-second segments.
     
-    # Access nested config keys safely
-    checkpoint = config.get('model', {}).get('checkpoint_path')
-    base_path = config.get('paths', {}).get('base_records_dir')
-    emb_dim = config.get('model', {}).get('embedding_dim', 512)
+    Args:
+        df (pd.DataFrame): Must contain a 'path' column with WFDB record paths.
+        config (dict): Configuration dictionary with model and paths.
+        batch_size (int): Number of ECGs to process per batch on GPU.
+        
+    Returns:
+        pd.DataFrame: Original dataframe concatenated with embedding columns (512-dim).
+    """
+    import torch
+    import numpy as np
+    import os
+    from tqdm import tqdm
 
-    if not checkpoint or not base_path:
-        raise ValueError("Missing 'checkpoint_path' or 'base_records_dir' in config.")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    checkpoint = config["model"]["checkpoint_path"]
+    base_path = config["paths"]["base_records_dir"]
+    emb_dim = config["model"].get("embedding_dim", 512)
 
+    # Load model
     model = build_model_from_checkpoint(checkpoint).to(device)
     model.eval()
 
-    embeddings = []
-    print(f"--- Extracting Embeddings for {len(df)} records ---")
-    
-    for _, row in tqdm(df.iterrows(), total=len(df), leave=False):
-        try:
-            full_path = os.path.join(base_path, row['path'])
-            record = wfdb.rdrecord(full_path)
-            signal = record.p_signal.T 
-            
-            # Standardize to 5000 samples
-            if signal.shape[1] < 5000:
-                signal = np.pad(signal, ((0,0), (0, 5000 - signal.shape[1])))
-            signal = signal[:, :5000]
+    # Prepare full record paths
+    record_paths = []
+    for p in df["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        record_id = os.path.basename(p)
+        record_paths.append(os.path.join(base_path, p, record_id))
 
-            x = torch.tensor(signal).float().unsqueeze(0).to(device)
-            
-            with torch.no_grad():
-                feat = model(source=x, features_only=True)['features']
-                pooled = feat.mean(dim=1).cpu().numpy().flatten()
-                embeddings.append(pooled)
+    all_embeddings = []
+
+    # Process in batches
+    for i in tqdm(range(0, len(record_paths), batch_size), desc="Embedding batches"):
+        batch_paths = record_paths[i:i+batch_size]
+        batch_signals_5s = []
+
+        for path in batch_paths:
+            try:
+                rec = wfdb.rdrecord(path)
+                sig = rec.p_signal.T  # (channels, time)
                 
-        except Exception as e:
-            embeddings.append(np.zeros(emb_dim))
+                # Ensure 10 seconds (assume 5000 samples per 5s segment)
+                if sig.shape[1] < 10000:
+                    pad_width = 10000 - sig.shape[1]
+                    sig = np.pad(sig, ((0,0),(0,pad_width)))
+                sig = sig[:, :10000]  # exactly 10 seconds
+                
+                # Split into two 5-second segments
+                first_5s = sig[:, :5000]
+                second_5s = sig[:, 5000:10000]
 
-    emb_cols = [f'emb_{i}' for i in range(emb_dim)]
-    # Use the original index to ensure merge alignment
-    emb_df = pd.DataFrame(embeddings, columns=emb_cols, index=df.index)
-    
+                batch_signals_5s.append((first_5s, second_5s))
+
+            except Exception as e:
+                print(f"Error reading {path}: {e}")
+                # fallback: zeros for both segments
+                batch_signals_5s.append((np.zeros((rec.n_sig if 'rec' in locals() else 12, 5000)),
+                                         np.zeros((rec.n_sig if 'rec' in locals() else 12, 5000))))
+
+        # Stack both segments and run model
+        batch_embeddings = []
+        for seg1, seg2 in batch_signals_5s:
+            x1 = torch.tensor(seg1).float().unsqueeze(0).to(device)
+            x2 = torch.tensor(seg2).float().unsqueeze(0).to(device)
+            with torch.no_grad():
+                f1 = model(source=x1, features_only=True)["features"].mean(dim=1)
+                f2 = model(source=x2, features_only=True)["features"].mean(dim=1)
+                pooled = torch.cat([f1, f2], dim=1).cpu().numpy().flatten()  # 512-dim
+                batch_embeddings.append(pooled)
+        
+        all_embeddings.append(np.stack(batch_embeddings))
+
+    # Final array
+    all_embeddings = np.vstack(all_embeddings)
+    emb_cols = [f"emb_{i}" for i in range(emb_dim)]
+    emb_df = pd.DataFrame(all_embeddings, columns=emb_cols, index=df.index)
     return pd.concat([df, emb_df], axis=1)
-
 
 def prepare_model_features(model_df, target_type='labels'):
     """
@@ -759,11 +813,12 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"{steps[2]}")
         earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
+        
         pbar.update(1)
         # 🔥 NEW — Add embeddings
         
         #Changed
-        earliest_ecgs = extract_embeddings_for_pipeline(earliest_ecgs, config)
+        earliest_ecgs = extract_embeddings_for_pipeline_batch_10s(earliest_ecgs, config)
         
         pbar.set_description(f"{steps[3]}")
         ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
