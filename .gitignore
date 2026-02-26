@@ -1,6 +1,6 @@
 .DS_Store
-data/processed/*
 data/raw/*
+data/processed/*
 __pycache__/
 *.pyc
 **/.ipynb_checkpoints/
@@ -8,5 +8,3 @@ notebooks/Untitled.ipynb
 notebooks/baselineWeverything.ipynb
 notebooks/diagnosis_and_report.ipynb
 notebooks/report_diagnosis.ipynb
-data/raw/.gitkeep
-data/processed/.gitkeep
