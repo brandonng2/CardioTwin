@@ -1,4 +1,5 @@
 import json
+import ast
 import os
 from pathlib import Path
 
@@ -163,7 +164,7 @@ def fit_multilabel_mlp(
         num_labels=num_labels,
         dropout=dropout,
     ).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     loader = torch.utils.data.DataLoader(
         torch.utils.data.TensorDataset(torch.from_numpy(X), torch.from_numpy(y)),
@@ -332,36 +333,61 @@ def aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours: flo
 
 
 def create_model_df(ed_encounters, ecg_aggregate_vitals):
+    """
+    Merge ED encounters with ECG and vital signs data.
+    """
+    # Ensure consistent data types for merge keys
     ecg_aggregate_vitals = ecg_aggregate_vitals.copy()
     ed_encounters = ed_encounters.copy()
 
-    ecg_aggregate_vitals["subject_id"] = pd.to_numeric(
-        ecg_aggregate_vitals["subject_id"], errors="coerce"
-    ).astype("Int64")
-    ed_encounters["subject_id"] = pd.to_numeric(
-        ed_encounters["subject_id"], errors="coerce"
-    ).astype("Int64")
-    ecg_aggregate_vitals["ed_stay_id"] = pd.to_numeric(
-        ecg_aggregate_vitals["ed_stay_id"], errors="coerce"
-    ).astype("Int64")
-    ed_encounters["ed_stay_id"] = pd.to_numeric(
-        ed_encounters["ed_stay_id"], errors="coerce"
-    ).astype("Int64")
+    merge_keys = ['subject_id', 'ed_stay_id', 'hadm_id', 'icu_stay_id']
 
-    return ecg_aggregate_vitals.merge(
-        ed_encounters, on=["subject_id", "ed_stay_id"], how="inner"
+    for key in merge_keys:
+        ecg_aggregate_vitals[key] = pd.to_numeric(ecg_aggregate_vitals[key], errors='coerce').astype('Int64')
+        ed_encounters[key] = pd.to_numeric(ed_encounters[key], errors='coerce').astype('Int64')
+    
+    model_df = ecg_aggregate_vitals.merge(
+        ed_encounters,
+        on=merge_keys,
+        how='inner'
     )
+    
+    return model_df
 
 
-def prepare_model_features(model_df, ed_ecg_records):
+def onehot_labels(df, label_column='labels', prefix='label_'):
+    """
+    One-hot encode a label column containing lists (or string representations of lists).
+    """
+    df[label_column] = df[label_column].apply(
+        lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+    )
+    all_labels = sorted({
+        label
+        for labels_list in df[label_column]
+        if isinstance(labels_list, list)
+        for label in labels_list
+    })
+    onehot_df = pd.DataFrame(
+        {f'{prefix}{label}': df[label_column].apply(lambda x: int(isinstance(x, list) and label in x)) for label in all_labels},
+        index=df.index
+    )
+    return pd.concat([df, onehot_df], axis=1)
+
+
+def prepare_model_features(model_df):
     """Prepare feature matrix X and target matrix y for diagnosis label prediction."""
+
+    model_df = onehot_labels(model_df, label_column='full_report', prefix='report_')
+    model_df = onehot_labels(model_df, label_column='diagnosis_labels', prefix='label_')
+
     model_df_encoded = pd.get_dummies(model_df, columns=["race", "gender"], drop_first=True)
 
     ecg_features = [
         "rr_interval", "p_onset", "p_end", "qrs_onset", "qrs_end",
         "t_end", "p_axis", "qrs_axis", "t_axis", "qrs_duration", "pr_interval", "qt_proxy",
     ]
-    machine_cols = [col for col in ed_ecg_records.columns if col.startswith("report_")]
+    machine_cols = [col for col in model_df_encoded.columns if col.startswith("report_")]
     vital_features = [
         col for col in model_df_encoded.columns
         if any(kw in col for kw in ["_mean", "_std", "_min", "_max", "_closest", "vitals_time_before_ecg"])
@@ -688,7 +714,7 @@ def run_mlp_baseline_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[5])
-        X, y, y_features = prepare_model_features(model_df, ed_ecg_records)
+        X, y, y_features = prepare_model_features(model_df)
         # StandardScaler — MLPs are sensitive to feature scale; XGBoost is not
         scaler = StandardScaler()
         X_scaled = pd.DataFrame(

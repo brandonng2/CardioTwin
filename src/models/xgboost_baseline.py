@@ -30,10 +30,6 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         config = json.load(f)
     
-    # Set default target_type if not specified
-    if 'target_type' not in config:
-        config['target_type'] = 'labels'
-    
     return config
 
 
@@ -277,7 +273,7 @@ def onehot_labels(df, label_column='labels', prefix='label_'):
 
     return pd.concat([df, onehot_df], axis=1)
 
-def prepare_model_features(model_df, target_type='labels'):
+def prepare_model_features(model_df):
     """
     Prepare feature matrix X and target matrix y for modeling.
     """
@@ -304,16 +300,9 @@ def prepare_model_features(model_df, target_type='labels'):
 
     demo_features = ['anchor_age'] + [c for c in model_df_encoded.columns if c.startswith(('race_', 'gender_'))]
 
-    if target_type == 'labels':
-        X_features = machine_cols + vital_features + demo_features + ecg_features
-        y_features = label_cols
-        output_prefix = 'diagnosis'
-    elif target_type == 'reports':
-        X_features = vital_features + demo_features + ecg_features
-        y_features = machine_cols
-        output_prefix = 'ecg_report'
-    else:
-        raise ValueError(f"target_type must be 'labels' or 'reports', got '{target_type}'")
+    X_features = machine_cols + vital_features + demo_features + ecg_features
+    y_features = label_cols
+    output_prefix = 'diagnosis'
 
     X = model_df_encoded[X_features].copy()
     y = model_df_encoded[y_features].copy()
@@ -661,7 +650,7 @@ def evaluate_and_visualize_multilabel_model(multi_xgb, X_test, y_test, y_feature
     return results_df
 
 
-def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=None):
+def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
     """
     Main XGBoost baseline pipeline with progress tracking.
     
@@ -687,13 +676,6 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
     try:
         pbar.set_description(f"{steps[0]}")
         config = load_config(config_path)
-        # Override config with command-line argument if provided
-        if target_type is not None:
-            config['target_type'] = target_type
-        else:
-            # Use config value if no argument provided
-            target_type = config.get('target_type', 'labels')
-        
         ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
         pbar.update(1)
         
@@ -716,7 +698,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         
         pbar.set_description(f"{steps[5]}")
         # Use target_type that was already set from args or config
-        X, y, y_features, output_prefix = prepare_model_features(model_df, target_type=target_type)
+        X, y, y_features, output_prefix = prepare_model_features(model_df)
         pbar.update(1)
         
         pbar.set_description(f"{steps[6]}")
@@ -731,13 +713,7 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         pbar.update(1)
         pbar.close()  # Close progress bar before evaluation prints output
         
-        # Determine label group name based on target type
-        if target_type == 'labels':
-            label_group_name = 'Diagnosis Labels'
-        elif target_type == 'reports':
-            label_group_name = 'ECG Report Labels'
-        else:
-            label_group_name = 'Diagnosis Labels'
+        label_group_name = 'Diagnosis Labels'
         
         results_df = evaluate_and_visualize_multilabel_model(
             multi_xgb, X_test, y_test, y_features, output_prefix, out_path=out_path, label_group_name=label_group_name
@@ -748,7 +724,6 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path, target_type=Non
         raise e
     
     print()
-    target_name = "diagnosis labels" if target_type == 'labels' else "ECG machine reports"
-    print(f"✓ XGBoost baseline model complete (predicted {target_name})!")
+    print(f"✓ XGBoost baseline model complete (predicted diagnosis labels)!")
     
     return results_df
