@@ -33,11 +33,6 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 │   ├── raw/                           # Raw input data files (e.g., MIMIC-IV CSVs)
 │   ├── processed/                     # Output of preprocessing scripts
 │   └── model_results/                 # Model outputs (metrics, plots, predictions)
-├── docs/                              # Project documentation and reports
-│   ├── index.html                     # Main documentation page with interactive navigation
-│   ├── report.css                     # Styles for documentation website
-│   ├── report.js                      # Interactive functionality for documentation
-│   └── top_10_causes_of_death.csv     # Reference data for cardiovascular mortality statistics
 ├── notebooks/                         # Jupyter notebooks for testing and exploration
 │   ├── static_preprocessing.ipynb     # Notebook for static preprocessing development
 │   ├── ecg_preprocessing.ipynb        # Notebook for ECG preprocessing development
@@ -67,7 +62,7 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 
 ## Prerequisites
 
-- **Python:** 3.8 or higher
+- **Python:** 3.9
 - **PhysioNet Access:** Credentialed access to all MIMIC-IV datasets
 - **Required Training:** CITI "Data or Specimens Only Research" certification
 - **Google BigQuery:** Optional but recommended for efficient data extraction
