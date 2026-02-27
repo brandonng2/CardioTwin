@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -214,7 +215,6 @@ def prepare_model_features(model_df):
         X             : feature DataFrame
         y             : label DataFrame
         y_features    : list of label column names
-        output_prefix : string prefix for output files ('diagnosis')
         cols_to_scale : list of continuous column names (ECG + vitals) to normalize
     """
     model_df = onehot_labels(model_df, label_column="full_report", prefix="report_")
@@ -245,7 +245,7 @@ def prepare_model_features(model_df):
     # Continuous columns that benefit from normalization
     cols_to_scale = [c for c in (ecg_features + vital_features) if c in X.columns]
 
-    return X, y, label_cols, "diagnosis", cols_to_scale
+    return X, y, label_cols, cols_to_scale
 
 
 # =============================================================================
@@ -297,6 +297,68 @@ def scale_features(X_train, X_test, cols_to_scale):
 
 
 # =============================================================================
+# SMOTE resampling (used by SMOTE variant)
+# =============================================================================
+
+def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, random_state=42):
+    """
+    Apply SMOTE independently per label to training data for labels whose
+    positive prevalence falls below `prevalence_threshold`.
+
+    Because SMOTE requires a single binary target, we iterate over each
+    low-prevalence label, resample X/y for that label, then stitch the
+    synthetic rows back into the full training set.
+
+    Args:
+        X_train              : Training feature DataFrame
+        y_train              : Training label DataFrame
+        prevalence_threshold : Labels with pos_rate below this get oversampled (default: 0.08)
+        random_state         : Random seed for reproducibility
+
+    Returns:
+        X_resampled, y_resampled : Augmented training DataFrames (index reset)
+    """
+    low_prev_labels = [
+        col for col in y_train.columns
+        if y_train[col].mean() < prevalence_threshold and y_train[col].sum() > 1
+    ]
+
+    if not low_prev_labels:
+        return X_train.reset_index(drop=True), y_train.reset_index(drop=True)
+
+    X_synthetic_all = []
+    y_synthetic_all = []
+
+    for col in low_prev_labels:
+        smote = SMOTE(random_state=random_state)
+        X_res, y_res = smote.fit_resample(X_train, y_train[col])
+
+        # Only keep the newly generated synthetic rows (appended at the end by SMOTE)
+        n_synthetic = len(X_res) - len(X_train)
+        if n_synthetic <= 0:
+            continue
+
+        X_new = pd.DataFrame(X_res[-n_synthetic:], columns=X_train.columns)
+
+        # For synthetic rows: set this label to 1, all other labels to 0
+        y_new = pd.DataFrame(0, index=range(n_synthetic), columns=y_train.columns)
+        y_new[col] = 1
+
+        X_synthetic_all.append(X_new)
+        y_synthetic_all.append(y_new)
+
+    if X_synthetic_all:
+        X_resampled = pd.concat([X_train] + X_synthetic_all, ignore_index=True)
+        y_resampled = pd.concat([y_train] + y_synthetic_all, ignore_index=True)
+        n_added = len(X_resampled) - len(X_train)
+    else:
+        X_resampled = X_train.reset_index(drop=True)
+        y_resampled = y_train.reset_index(drop=True)
+
+    return X_resampled, y_resampled, n_added, low_prev_labels
+
+
+# =============================================================================
 # Weighted loss helper (used by weighted & normalized variants)
 # =============================================================================
 
@@ -322,7 +384,7 @@ def evaluate_and_visualize_multilabel_model(
     X_test,
     y_test,
     y_features,
-    output_prefix,
+    model_name,
     out_path="../data/model_results/",
     label_group_name=None,
 ):
@@ -337,7 +399,7 @@ def evaluate_and_visualize_multilabel_model(
         X_test         : Test feature DataFrame
         y_test         : Test label DataFrame
         y_features     : List of label column names
-        output_prefix  : Prefix for output filenames
+        model_name     : Name used for output filenames (e.g. 'xgboost_baseline')
         out_path       : Directory to save plots and CSV
         label_group_name: Human-readable label group name (default: 'All N Labels')
 
@@ -446,8 +508,9 @@ def evaluate_and_visualize_multilabel_model(
         fontsize=10, bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
     )
 
+    fig.suptitle(f"{model_name} Results", fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plot_path = Path(out_path) / f"xgboost_{output_prefix}_evaluation_plots.png"
+    plot_path = Path(out_path) / f"{model_name}_evaluation_plots.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Plots saved to '{plot_path}'")
@@ -496,9 +559,10 @@ def evaluate_and_visualize_multilabel_model(
     )
     ax.set_xlabel("Predicted Label", fontsize=12)
     ax.set_ylabel("True Label", fontsize=12)
+    fig.suptitle(f"{model_name} Results", fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
 
-    label_cm_path = Path(out_path) / f"xgboost_{output_prefix}_label_confusion_matrix.png"
+    label_cm_path = Path(out_path) / f"{model_name}_label_confusion_matrix.png"
     plt.savefig(label_cm_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Label co-occurrence matrix saved to '{label_cm_path}'")
@@ -515,7 +579,7 @@ def evaluate_and_visualize_multilabel_model(
     print(f"  Overall Recall:    {recall:.3f}")
     print(f"  Overall F1-Score:  {f1:.3f}")
 
-    csv_path = Path(out_path) / f"xgboost_{output_prefix}_results.csv"
+    csv_path = Path(out_path) / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
 

@@ -2,7 +2,11 @@ import json
 import argparse
 from pathlib import Path
 from src.models.mlp import run_mlp_baseline_pipeline
-from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
+from src.models.xgboost import (
+    run_xgboost_base_pipeline,
+    run_xgboost_weighted_pipeline,
+    run_xgboost_smote_pipeline,
+)
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
@@ -73,10 +77,10 @@ def run_icd_extraction(args):
     print("✓ ICD code extraction completed")
 
 
-def run_xgboost_baseline(args):
-    """Run XGBoost baseline model."""
+def run_xgboost_base(args):
+    """Run XGBoost base model."""
     print("\n" + "=" * 60)
-    print("XGBOOST BASELINE MODEL")
+    print("XGBOOST BASE MODEL")
     print("=" * 60)
 
     config_path = "configs/xgboost_baseline_params.json"
@@ -84,7 +88,35 @@ def run_xgboost_baseline(args):
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
 
-    run_xgboost_baseline_pipeline(in_dir, config_path, out_path)
+    run_xgboost_base_pipeline(in_dir, config_path, out_path)
+
+
+def run_xgboost_weighted(args):
+    """Run XGBoost weighted model."""
+    print("\n" + "=" * 60)
+    print("XGBOOST WEIGHTED MODEL")
+    print("=" * 60)
+
+    config_path = "configs/xgboost_baseline_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_xgboost_weighted_pipeline(in_dir, config_path, out_path)
+
+
+def run_xgboost_smote(args):
+    """Run XGBoost SMOTE model."""
+    print("\n" + "=" * 60)
+    print("XGBOOST SMOTE MODEL")
+    print("=" * 60)
+
+    config_path = "configs/xgboost_baseline_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_xgboost_smote_pipeline(in_dir, config_path, out_path)
 
 
 def run_mlp_baseline(args):
@@ -117,11 +149,13 @@ def main():
             # Run everything except certain steps
             python run.py --all --skip-static
 
-            # Run XGBoost baseline
-            python run.py --xgbaseline            # Predict diagnosis labels
+            # Run XGBoost variants
+            python run.py --xgboost-base        # Baseline
+            python run.py --xgboost-weighted    # Per-label scale_pos_weight
+            python run.py --xgboost-smote       # SMOTE on rare labels
 
             # Run MLP baseline
-            python run.py --mlpbaseline           # Predict diagnosis labels
+            python run.py --mlpbaseline
         """,
     )
 
@@ -132,8 +166,16 @@ def main():
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
     parser.add_argument(
-        "--xgbaseline", action="store_true", dest="xgb_target",
-        help="Run XGBoost baseline model (predicts diagnosis labels)",
+        "--xgboost-base", action="store_true", dest="xgb_base",
+        help="Run XGBoost base model (default)",
+    )
+    parser.add_argument(
+        "--xgboost-weighted", action="store_true", dest="xgb_weighted",
+        help="Run XGBoost weighted model — per-label scale_pos_weight",
+    )
+    parser.add_argument(
+        "--xgboost-smote", action="store_true", dest="xgb_smote",
+        help="Run XGBoost SMOTE model — normalized + SMOTE on labels < 8% prevalence",
     )
     parser.add_argument(
         "--mlpbaseline", action="store_true", dest="mlp_baseline",
@@ -145,14 +187,15 @@ def main():
     parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
     parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
-    parser.add_argument("--skip-xgbaseline", action="store_true", help="Skip XGBoost baseline model")
+    parser.add_argument("--skip-xgboost-base", action="store_true", help="Skip XGBoost base model")
     parser.add_argument("--skip-mlpbaseline", action="store_true", help="Skip MLP baseline model")
 
     args = parser.parse_args()
 
     # Determine what to run
     run_all = args.all or not any([
-        args.static, args.ecg, args.vitals, args.entities, args.xgb_target, args.mlp_baseline
+        args.static, args.ecg, args.vitals, args.entities,
+        args.xgb_base, args.mlp_baseline
     ])
 
     print("=" * 60)
@@ -179,9 +222,15 @@ def main():
     print("✓ ALL PREPROCESSING COMPLETED!")
     print("=" * 60)
 
-    # XGBoost Baseline Model
-    if (run_all and not args.skip_xgbaseline) or args.xgb_target:
-        run_xgboost_baseline(args)
+    # XGBoost Models
+    if (run_all and not args.skip_xgboost_base) or args.xgb_base:
+        run_xgboost_base(args)
+
+    if (run_all and not args.skip_xgboost_weighted) or args.xgb_weighted:
+        run_xgboost_weighted(args)
+
+    if (run_all and not args.skip_xgboost_smote) or args.xgb_smote:
+        run_xgboost_smote(args)
 
     # MLP Baseline Model
     if (run_all and not args.skip_mlpbaseline) or args.mlp_baseline:

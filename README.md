@@ -15,7 +15,7 @@ The pipeline supports both static (EHR demographic) and temporal (vitals and ECG
 ### Baseline Models
 
 The repository includes baseline models that serve as benchmarks for cardiovascular diagnosis prediction:
-- **XGBoost (baseline, weighted, normalized):** Multi-label classifiers predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features
+- **XGBoost (base, weighted, SMOTE):** Multi-label classifiers predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features. All variants use StandardScaler normalization; the base variant is the default.
 - **MLP:** Feedforward neural network with BCEWithLogitsLoss and per-label class weighting for the same prediction task
 
 These baselines establish performance benchmarks for more sophisticated deep learning models (LSTM, Transformer).
@@ -51,9 +51,7 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 │   └── models/
 │       ├── tabular_utils.py           # Shared data loading, feature engineering, and evaluation utilities
 │       ├── mlp.py                     # MLP baseline model for multi-label classification
-│       ├── xgboost_baseline.py        # XGBoost baseline model (unweighted)
-│       ├── xgboost_baseline_weighted.py    # XGBoost with per-label class-weighted loss
-│       └── xgboost_baseline_normalize.py   # XGBoost with feature normalization and weighted loss
+│       └── xgboost.py                 # XGBoost models: base (normalized), weighted, and SMOTE variants
 ├── run.py                             # Main script to execute the preprocessing pipeline
 ├── environment.yml                    # Conda environment and dependencies
 ├── .gitignore                         # Git ignore rules
@@ -226,16 +224,18 @@ Alternatively, download complete datasets and filter locally:
 
 ### XGBoost Multi-Label Classifier
 
-The XGBoost baseline uses gradient boosted decision trees with a multi-output approach. Three variants are provided:
+The XGBoost baseline uses gradient boosted decision trees with a multi-output approach. All three variants apply StandardScaler normalization to continuous ECG and vital features (fit on train only, applied to test). Three variants are provided:
 
-- **`xgboost_baseline.py`** — Unweighted, no feature scaling
-- **`xgboost_baseline_weighted.py`** — Per-label `scale_pos_weight = n_negative / n_positive` to handle class imbalance
-- **`xgboost_baseline_normalize.py`** — StandardScaler normalization on continuous ECG and vital features, plus per-label weighted loss
+- **`--xgboost-base`** *(default when using `--all`)* — Best results (No class imbalancing handling)
+- **`--xgboost-weighted`** — Per-label `scale_pos_weight = n_negative / n_positive` to handle class imbalance
+- **`--xgboost-smote`** — SMOTE oversampling applied to labels with < 8% positive prevalence in the training set
+
+> **Note:** `--xgboost-weighted` and `--xgboost-smote` are experimental variants retained for benchmarking. Empirically, both underperform the base variant on this dataset — weighted loss over-corrects on severely imbalanced labels, and SMOTE degrades performance due to the high proportion of binary features. The base variant is recommended for all downstream use.
 
 #### Model Configuration
 - **Algorithm:** XGBoost with MultiOutputClassifier wrapper
 - **Task:** Multi-label binary classification (cardiovascular diagnosis labels)
-- **Max Depth:** 6
+- **Max Depth:** 5
 - **Learning Rate:** 0.1
 - **Estimators:** 100 trees per label
 - **Train/Test Split:** 80/20 stratified by patient (ensures no patient overlap)
@@ -356,20 +356,30 @@ Each step reads its configuration from the corresponding JSON file in `configs/`
 After preprocessing, train baseline models for multi-label cardiovascular diagnosis prediction:
 
 ```bash
-# Train XGBoost baseline (unweighted)
-python run.py --xgbaseline
+# XGBoost — base (best results) — default when using --all
+python run.py --xgboost-base
+
+# XGBoost — Per-label class-weighted loss
+python run.py --xgboost-weighted
+
+# XGBoost — SMOTE on labels with < 8% prevalence
+python run.py --xgboost-smote
 
 # Train MLP baseline
 python run.py --mlpbaseline
 ```
 
+> **Note:** When running `python run.py --all`, only the base (normalized) XGBoost variant runs by default. Use `--skip-xgboost-base` to skip it, or invoke the weighted/SMOTE variants explicitly.
+
 ### Model Output Files
 
-All model outputs are saved to `data/model_results/`:
+All model outputs are saved to `data/model_results/`. Filenames are prefixed by model variant:
 
-- `xgboost_diagnosis_results.csv` — Per-label performance metrics (ROC-AUC, PR-AUC, support)
-- `xgboost_diagnosis_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
-- `xgboost_diagnosis_label_confusion_matrix.png` — Label co-occurrence matrix
+- `xgboost_base_results.csv` — Per-label performance metrics (ROC-AUC, PR-AUC, support)
+- `xgboost_base_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
+- `xgboost_base_label_confusion_matrix.png` — Label co-occurrence matrix
+
+The same pattern applies for `xgboost_weighted_*` and `xgboost_smote_*` outputs.
 
 - `mlp_diagnosis_results.csv` — Per-label MLP performance metrics
 - `mlp_diagnosis_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
