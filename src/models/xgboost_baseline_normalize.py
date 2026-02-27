@@ -1,15 +1,9 @@
-"""
-xgboost_baseline.py
--------------------
-Plain XGBoost multi-label classifier — no class weighting, no feature scaling.
-"""
-
 import sys
 from tqdm import tqdm
 from sklearn.multioutput import MultiOutputClassifier
 from xgboost import XGBClassifier
 
-from models.tabular_utils import (
+from src.models.tabular_utils import (
     load_config,
     load_data_files,
     filter_ed_encounters,
@@ -19,28 +13,37 @@ from models.tabular_utils import (
     create_model_df,
     prepare_model_features,
     create_train_test_set,
+    scale_features,
+    compute_scale_pos_weights,
     evaluate_and_visualize_multilabel_model,
 )
 
 
 def train_xgboost_model(X_train, y_train):
-    """Train XGBoost multi-output classifier (unweighted)."""
-    multi_xgb = MultiOutputClassifier(
-        XGBClassifier(
+    """Train XGBoost multi-output classifier with per-label class-weighted loss."""
+    scale_pos_weights = compute_scale_pos_weights(y_train)
+
+    estimators = []
+    for col in y_train.columns:
+        clf = XGBClassifier(
             n_estimators=100,
             max_depth=5,
             learning_rate=0.1,
             eval_metric="logloss",
+            scale_pos_weight=scale_pos_weights[col],
             random_state=42,
-        ),
-        n_jobs=-1,
-    )
-    multi_xgb.fit(X_train, y_train)
+        )
+        clf.fit(X_train, y_train[col])
+        estimators.append(clf)
+
+    multi_xgb = MultiOutputClassifier(XGBClassifier(), n_jobs=-1)
+    multi_xgb.estimators_ = estimators
+    multi_xgb.n_outputs_  = len(estimators)
     return multi_xgb
 
 
-def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
-    """Main XGBoost baseline pipeline (unweighted, unscaled)."""
+def run_xgboost_normalized_pipeline(in_dir, config_path, out_path):
+    """Main XGBoost pipeline with StandardScaler normalization and weighted loss."""
     steps = [
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
@@ -48,12 +51,12 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
         "Aggregating vitals to ECG time",
         "Creating model dataframe",
         "Preparing features",
-        "Creating train/test split",
-        "Training XGBoost model",
+        "Creating train/test split & scaling",
+        "Training XGBoost model (weighted)",
         "Evaluating model",
     ]
 
-    print("Running XGBoost Baseline model...")
+    print("Running XGBoost Normalized model...")
     print()
 
     pbar = tqdm(
@@ -85,11 +88,13 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[5])
-        X, y, y_features, output_prefix, _ = prepare_model_features(model_df)
+        X, y, y_features, output_prefix, cols_to_scale = prepare_model_features(model_df)
         pbar.update(1)
 
         pbar.set_description(steps[6])
         X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
+        # Normalize ECG and vital features — fit on train only, apply to both
+        X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
         pbar.update(1)
 
         pbar.set_description(steps[7])
@@ -110,5 +115,5 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
         raise e
 
     print()
-    print("✓ XGBoost baseline model complete (predicted diagnosis labels)!")
+    print("✓ XGBoost normalized model complete (predicted diagnosis labels)!")
     return results_df

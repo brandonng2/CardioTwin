@@ -10,15 +10,15 @@ This repository provides an end-to-end framework for preparing integrated MIMIC-
 - **MIMIC-IV-ED:** Emergency department visits, diagnoses, and vitals
 - **MIMIC-IV-ECG:** Electrocardiogram recordings and measurements
 
-The pipeline supports both static (EHR demographic) and temporal (vitals and ECG) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular or cardiovascular-related diagnoses.**
+The pipeline supports both static (EHR demographic) and temporal (vitals and ECG) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular from the emergency department (ED).**
 
 ### Baseline Models
 
-The repository includes XGBoost multi-label classifiers that serve as baseline models for:
-- **Diagnosis Prediction:** Predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features
-- **ECG Finding Prediction:** Predicting ECG machine-reported findings from vital signs and demographic features
+The repository includes baseline models that serve as benchmarks for cardiovascular diagnosis prediction:
+- **XGBoost (baseline, weighted, normalized):** Multi-label classifiers predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features
+- **MLP:** Feedforward neural network with BCEWithLogitsLoss and per-label class weighting for the same prediction task
 
-These baselines establish performance benchmarks for more sophisticated deep learning models.
+These baselines establish performance benchmarks for more sophisticated deep learning models (LSTM, Transformer).
 
 ## Project Structure
 ```
@@ -52,11 +52,16 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 │   │   ├── icd_entity_extraction.py   # Functions to extract cardiovascular clinical entities from ICD codes
 │   │   ├── icd_code_labels.py         # ICD-10 code label mappings for cardiovascular conditions
 │   │   ├── vitals_preprocessing.py    # Functions to preprocess vital signs data
-│   │   └── machine_measurements_labels.py  # Label mappings for machine measurements (e.g., ventilator, IABP)
+│   │   └── machine_measurements_labels.py  # Label mappings for machine measurements
 │   └── models/
-│       └── xgboost_baseline.py        # XGBoost baseline model for multi-label classification
+│       ├── tabular_utils.py           # Shared data loading, feature engineering, and evaluation utilities
+│       ├── mlp.py                     # MLP baseline model for multi-label classification
+│       ├── xgboost_baseline.py        # XGBoost baseline model (unweighted)
+│       ├── xgboost_baseline_weighted.py    # XGBoost with per-label class-weighted loss
+│       └── xgboost_baseline_normalize.py   # XGBoost with feature normalization and weighted loss
 ├── run.py                             # Main script to execute the preprocessing pipeline
-├── requirements.txt                   # Python dependencies
+├── environment.yml                    # Conda environment and dependencies
+├── .gitignore                         # Git ignore rules
 └── README.md                          # Project overview and setup instructions
 ```
 
@@ -75,6 +80,12 @@ This project requires access to **multiple MIMIC-IV datasets**.
 
 - **MIMIC-IV-ECG v1.0** (ECG recordings): https://physionet.org/content/mimic-iv-ecg/1.0/  
   Download `machine_measurements.csv` and `record_list.csv` (rename this to `ecg_record_list.csv`).
+
+MIMIC-IV-ECG is a subset of MIMIC-IV containing 800,000+ diagnostic ECGs matched to hospital admissions. Each record includes:
+- **Waveform data:** 12-lead ECG signals at 500 Hz stored in WFDB format
+- **Machine measurements:** Automated interval measurements (PR, QRS, QT, RR) and axis calculations
+- **Machine report:** Automated ECG findings (e.g., sinus rhythm, atrial fibrillation, LVH)
+- **Timing:** ECG acquisition time linked to ED and hospital stay identifiers
 
 ---
 
@@ -220,33 +231,34 @@ Alternatively, download complete datasets and filter locally:
 
 ### XGBoost Multi-Label Classifier
 
-The baseline model uses gradient boosted decision trees (XGBoost) with a multi-output approach to handle multiple simultaneous prediction targets.
+The XGBoost baseline uses gradient boosted decision trees with a multi-output approach. Three variants are provided:
 
-#### Model Architecture
+- **`xgboost_baseline.py`** — Unweighted, no feature scaling
+- **`xgboost_baseline_weighted.py`** — Per-label `scale_pos_weight = n_negative / n_positive` to handle class imbalance
+- **`xgboost_baseline_normalize.py`** — StandardScaler normalization on continuous ECG and vital features, plus per-label weighted loss
+
+#### Model Configuration
 - **Algorithm:** XGBoost with MultiOutputClassifier wrapper
-- **Task:** Multi-label binary classification
-- **Training:** One XGBoost classifier per label (independent binary classifiers)
+- **Task:** Multi-label binary classification (cardiovascular diagnosis labels)
 - **Max Depth:** 6
 - **Learning Rate:** 0.1
 - **Estimators:** 100 trees per label
 - **Train/Test Split:** 80/20 stratified by patient (ensures no patient overlap)
 
-#### Prediction Tasks
+### MLP Baseline
 
-**Task 1: Diagnosis Prediction (`labels`)**
+A feedforward neural network with three hidden layers (256 → 128 → 64), BatchNorm, Dropout, and BCEWithLogitsLoss with per-label positive weighting. Features are StandardScaler normalized (fit on train only) and early stopping is applied using a 10% validation split.
+
+#### Prediction Task
+
+**Diagnosis Prediction**
 - **Goal:** Predict cardiovascular ICD-10 diagnosis labels
 - **Input Features:**
   - ECG machine measurements (`report_*` columns): rhythm findings, QT intervals, axis measurements
   - Vital signs statistics: mean, std, min, max over 4-hour window before ECG
   - Closest vitals to ECG time: temperature, heart rate, respiratory rate, O2 saturation, blood pressure
+  - Demographics: age, race, gender
 - **Output Labels:** Binary indicators for cardiovascular diagnosis codes (e.g., atrial fibrillation, heart failure, MI)
-
-**Task 2: ECG Finding Prediction (`reports`)**
-- **Goal:** Predict ECG machine-reported findings
-- **Input Features:**
-  - Vital signs statistics and closest measurements (same as above)
-  - Diagnosis labels: cardiovascular ICD-10 codes
-- **Output Labels:** Binary indicators for ECG findings (e.g., sinus rhythm, prolonged QT, LVH)
 
 #### Evaluation Metrics
 
@@ -279,12 +291,21 @@ git clone https://github.com/brandonng2/ClinicalDigitalTwin.git
 cd ClinicalDigitalTwin
 ```
 
-### 2. Install Dependencies
+### 2. Create and Activate the Conda Environment
 ```bash
 conda env create -f environment.yml
+conda activate ClinicalDigitalTwin
 ```
 
-### 3. Verify Data Placement
+### 3. Install ECG-FM
+ECG-FM is a foundation model for ECG analysis pre-trained on MIMIC-IV-ECG. Install it directly from GitHub:
+```bash
+pip install git+https://github.com/bowang-lab/ecg-fm.git
+```
+
+For more details on ECG-FM and its usage, see the [ECG-FM repository](https://github.com/bowang-lab/ecg-fm).
+
+### 4. Verify Data Placement
 
 Ensure all required CSV files are in `data/raw/` before running preprocessing:
 - `admissions.csv`
@@ -335,33 +356,29 @@ Each step reads its configuration from the corresponding JSON file in `configs/`
 
 ---
 
-### Running the XGBoost Baseline Models
+### Running the Baseline Models
 
-After preprocessing, train baseline XGBoost models for multi-label prediction:
+After preprocessing, train baseline models for multi-label cardiovascular diagnosis prediction:
 
 ```bash
-# Train model to predict diagnosis labels (from ECG + vitals)
-python run.py --xgboost labels
+# Train XGBoost baseline (unweighted)
+python run.py --xgbaseline
 
-# Train model to predict ECG findings (from vitals + diagnoses)
-python run.py --xgboost reports
-
-# Train both models
-python run.py --xgboost labels
-python run.py --xgboost reports
+# Train MLP baseline
+python run.py --mlpbaseline
 ```
 
 ### Model Output Files
 
-The model generates output files with names based on the target type, saved to `data/model_results/`:
+All model outputs are saved to `data/model_results/`:
 
-- `xgboost_baseline_diagnosis_results.csv` - Per-label performance metrics (ROC-AUC, PR-AUC, support)
-- `xgboost_baseline_diagnosis_evaluation_plots.png` - ROC curves, PR curves, and aggregated confusion matrix
-- `xgboost_baseline_diagnosis_label_confusion_matrix.png` - Label co-occurrence matrix showing when true label on Y-axis is positive, how often predicted label on X-axis is also predicted positive
+- `xgboost_diagnosis_results.csv` — Per-label performance metrics (ROC-AUC, PR-AUC, support)
+- `xgboost_diagnosis_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
+- `xgboost_diagnosis_label_confusion_matrix.png` — Label co-occurrence matrix
 
-- `xgboost_baseline_ecg_report_results.csv` - Performance metrics for ECG findings (ROC-AUC, PR-AUC, support)
-- `xgboost_baseline_ecg_report_evaluation_plots.png` - ROC curves, PR curves, and aggregated confusion matrix for ECG findings
-- `xgboost_baseline_ecg_report_label_confusion_matrix.png` - ECG report co-occurrence matrix showing prediction patterns across different ECG findings
+- `mlp_diagnosis_results.csv` — Per-label MLP performance metrics
+- `mlp_diagnosis_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
+- `mlp_diagnosis_label_confusion_matrix.png` — Label co-occurrence matrix
 ---
 
 ### Exploratory Analysis
@@ -371,6 +388,14 @@ Use the notebooks in `notebooks/` to explore data distributions and quality and 
 ## Citations
 
 When using this project, please cite all relevant MIMIC-IV datasets:
+
+### ECG-FM
+```
+McKeen, S., Patel, N., Girgis, H., Emam, T., Cianflone, N., Tsang, T., Gibson, W., 
+McIntyre, W., Rayner-Kay, H., & Wang, B. (2024). ECG-FM: An Open Electrocardiogram 
+Foundation Model. arXiv preprint arXiv:2408.05178.
+https://github.com/bowang-lab/ecg-fm
+```
 
 ### MIMIC-IV (Core Hospital Data)
 ```

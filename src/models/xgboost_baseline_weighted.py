@@ -1,7 +1,8 @@
 """
-xgboost_baseline.py
+xgboost_weighted.py
 -------------------
-Plain XGBoost multi-label classifier — no class weighting, no feature scaling.
+XGBoost multi-label classifier with per-label class-weighted loss
+(scale_pos_weight = n_negative / n_positive). No feature scaling.
 """
 
 import sys
@@ -19,28 +20,36 @@ from models.tabular_utils import (
     create_model_df,
     prepare_model_features,
     create_train_test_set,
+    compute_scale_pos_weights,
     evaluate_and_visualize_multilabel_model,
 )
 
 
 def train_xgboost_model(X_train, y_train):
-    """Train XGBoost multi-output classifier (unweighted)."""
-    multi_xgb = MultiOutputClassifier(
-        XGBClassifier(
+    """Train XGBoost multi-output classifier with per-label class-weighted loss."""
+    scale_pos_weights = compute_scale_pos_weights(y_train)
+
+    estimators = []
+    for col in y_train.columns:
+        clf = XGBClassifier(
             n_estimators=100,
             max_depth=5,
             learning_rate=0.1,
             eval_metric="logloss",
+            scale_pos_weight=scale_pos_weights[col],
             random_state=42,
-        ),
-        n_jobs=-1,
-    )
-    multi_xgb.fit(X_train, y_train)
+        )
+        clf.fit(X_train, y_train[col])
+        estimators.append(clf)
+
+    multi_xgb = MultiOutputClassifier(XGBClassifier(), n_jobs=-1)
+    multi_xgb.estimators_ = estimators
+    multi_xgb.n_outputs_  = len(estimators)
     return multi_xgb
 
 
-def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
-    """Main XGBoost baseline pipeline (unweighted, unscaled)."""
+def run_xgboost_weighted_pipeline(in_dir, config_path, out_path):
+    """Main XGBoost pipeline with per-label weighted loss (unscaled features)."""
     steps = [
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
@@ -49,11 +58,11 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
         "Creating model dataframe",
         "Preparing features",
         "Creating train/test split",
-        "Training XGBoost model",
+        "Training XGBoost model (weighted)",
         "Evaluating model",
     ]
 
-    print("Running XGBoost Baseline model...")
+    print("Running XGBoost Weighted model...")
     print()
 
     pbar = tqdm(
@@ -110,5 +119,5 @@ def run_xgboost_baseline_pipeline(in_dir, config_path, out_path):
         raise e
 
     print()
-    print("✓ XGBoost baseline model complete (predicted diagnosis labels)!")
+    print("✓ XGBoost weighted model complete (predicted diagnosis labels)!")
     return results_df
