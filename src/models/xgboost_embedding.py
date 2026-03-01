@@ -1,6 +1,4 @@
 """
-xgboost_embedding.py
---------------------
 XGBoost multi-label classifier augmented with ECG-FM waveform embeddings.
 
 Extracts 512-dim embeddings from raw 10-second ECG signals using the ECG-FM
@@ -28,6 +26,7 @@ from pathlib import Path
 from sklearn.multioutput import MultiOutputClassifier
 from xgboost import XGBClassifier
 from fairseq_signals.models import build_model_from_checkpoint
+
 
 from src.models.tabular_utils import (
     load_config,
@@ -66,8 +65,7 @@ def _build_record_paths(df, base_path):
         p = os.path.splitext(p)[0]
         if p.startswith("files/"):
             p = p[len("files/"):]
-        record_id = os.path.basename(p)
-        paths.append(os.path.join(base_path, p, record_id))
+        paths.append(os.path.join(base_path, p))
     return paths
 
 

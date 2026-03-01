@@ -7,6 +7,7 @@ from src.models.xgboost import (
     run_xgboost_weighted_pipeline,
     run_xgboost_smote_pipeline,
 )
+from src.models.xgboost_embedding import run_xgboost_embedding_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
@@ -83,7 +84,7 @@ def run_xgboost_base(args):
     print("XGBOOST BASE MODEL")
     print("=" * 60)
 
-    config_path = "configs/xgboost_baseline_params.json"
+    config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
@@ -97,7 +98,7 @@ def run_xgboost_weighted(args):
     print("XGBOOST WEIGHTED MODEL")
     print("=" * 60)
 
-    config_path = "configs/xgboost_baseline_params.json"
+    config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
@@ -111,12 +112,26 @@ def run_xgboost_smote(args):
     print("XGBOOST SMOTE MODEL")
     print("=" * 60)
 
-    config_path = "configs/xgboost_baseline_params.json"
+    config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
 
     run_xgboost_smote_pipeline(in_dir, config_path, out_path)
+
+
+def run_xgboost_embedding(args):
+    """Run XGBoost with Embeddings model."""
+    print("\n" + "=" * 60)
+    print("XGBOOST W/ EMBEDDINGS MODEL")
+    print("=" * 60)
+
+    config_path = "configs/xgboost_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_xgboost_embedding_pipeline(in_dir, config_path, out_path)
 
 
 def run_mlp_baseline(args):
@@ -153,7 +168,8 @@ def main():
             python run.py --xgboost-base        # Baseline
             python run.py --xgboost-weighted    # Per-label scale_pos_weight
             python run.py --xgboost-smote       # SMOTE on rare labels
-
+            python run.py --xgboost-embedding   # ECG-FM Embeddings
+            
             # Run MLP baseline
             python run.py --mlpbaseline
         """,
@@ -175,7 +191,11 @@ def main():
     )
     parser.add_argument(
         "--xgboost-smote", action="store_true", dest="xgb_smote",
-        help="Run XGBoost SMOTE model — normalized + SMOTE on labels < 8% prevalence",
+        help="Run XGBoost SMOTE model — SMOTE on labels < 8% prevalence",
+    )
+    parser.add_argument(
+        "--xgboost-embedding", action="store_true", dest="xgb_embedding",
+        help="Run XGBoost embedding model — Creating ECG embeddings instead of derived features",
     )
     parser.add_argument(
         "--mlpbaseline", action="store_true", dest="mlp_baseline",
@@ -188,6 +208,7 @@ def main():
     parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
     parser.add_argument("--skip-xgboost-base", action="store_true", help="Skip XGBoost base model")
+    parser.add_argument("--skip-xgboost-embedding", action="store_true", help="Skip XGBoost embedding model")
     parser.add_argument("--skip-mlpbaseline", action="store_true", help="Skip MLP baseline model")
 
     args = parser.parse_args()
@@ -195,7 +216,8 @@ def main():
     # Determine what to run
     run_all = args.all or not any([
         args.static, args.ecg, args.vitals, args.entities,
-        args.xgb_base, args.mlp_baseline
+        args.xgb_base, args.xgb_weighted, args.xgb_smote,
+        args.xgb_embedding, args.mlp_baseline
     ])
 
     print("=" * 60)
@@ -231,6 +253,9 @@ def main():
 
     if (run_all and not args.skip_xgboost_smote) or args.xgb_smote:
         run_xgboost_smote(args)
+
+    if (run_all and not args.skip_xgboost_embedding) or args.xgb_embedding:
+        run_xgboost_embedding(args)
 
     # MLP Baseline Model
     if (run_all and not args.skip_mlpbaseline) or args.mlp_baseline:

@@ -15,5 +15,9 @@ dependencies:
   - matplotlib=3.9.4
   - ipython=8.18.1
   - pip=25.2
-  - wfdb
-  - xgboost
+  - wfdb=4.3.1
+  - xgboost=2.1.4
+  - pip:
+    - imbalanced-learn==0.12.4
+    - transformers==4.30.0
+    - omegaconf==2.1.1
