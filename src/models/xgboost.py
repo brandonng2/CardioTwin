@@ -1,11 +1,3 @@
-"""
-All XGBoost multi-label classifier variants in one file:
-
-  - run_xgboost_base_pipeline      : Normalized (StandardScaler), no class weighting  [default]
-  - run_xgboost_weighted_pipeline  : Normalized + per-label class-weighted loss (scale_pos_weight)
-  - run_xgboost_smote_pipeline     : Normalized + SMOTE oversampling on labels < 3% prevalence
-"""
-
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 

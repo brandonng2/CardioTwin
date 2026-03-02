@@ -1,15 +1,3 @@
-"""
-XGBoost multi-label classifier augmented with ECG-FM waveform embeddings.
-
-Extracts 512-dim embeddings from raw 10-second ECG signals using the ECG-FM
-foundation model (fairseq_signals), then trains a normalized XGBoost classifier
-on the combined feature set (embeddings + ECG measurements + vitals + demographics).
-
-Pipeline:
-    Load data → Extract ECG embeddings → Aggregate vitals → Build model df
-    → Prepare features → Normalize → Train XGBoost → Evaluate
-"""
-
 import sys
 import os
 import logging
@@ -17,16 +5,15 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import log_loss
+from sklearn.multioutput import MultiOutputClassifier
+from xgboost import XGBClassifier
 import torch
 import wfdb
 from tqdm import tqdm
-from pathlib import Path
-from sklearn.multioutput import MultiOutputClassifier
-from xgboost import XGBClassifier
 from fairseq_signals.models import build_model_from_checkpoint
-
 
 from src.models.tabular_utils import (
     load_config,
@@ -46,19 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# ECG-FM embedding extraction
+# Helpers
 # =============================================================================
 
 def _build_record_paths(df, base_path):
     """
     Resolve full WFDB record paths from the 'path' column in the ECG DataFrame.
-
-    Args:
-        df        : DataFrame with a 'path' column of relative record paths
-        base_path : Root directory containing WFDB records
-
-    Returns:
-        List of absolute record paths (no file extension) in the same row order as df
     """
     paths = []
     for p in df["path"]:
@@ -69,124 +49,108 @@ def _build_record_paths(df, base_path):
     return paths
 
 
-def _read_ecg_signal(path, n_channels=12, target_samples=10000):
+def _read_ecg_signal(path, target_samples=10000):
     """
-    Read a WFDB record and return a (channels, target_samples) array.
-    Pads with zeros if signal is shorter than target_samples.
-
-    Args:
-        path           : WFDB record path (no extension)
-        n_channels     : Expected number of ECG leads (default: 12)
-        target_samples : Total samples expected for the full recording (default: 10000 = 10s @ 500Hz)
-
-    Returns:
-        sig : np.ndarray of shape (n_channels, target_samples)
-
-    Raises:
-        RuntimeError if the record cannot be read
+    Read a WFDB record and return a (channels, target_samples) float32 array.
+    Pads with zeros if the signal is shorter than target_samples.
     """
     rec = wfdb.rdrecord(path)
-    sig = rec.p_signal.T  # (channels, time)
+    sig = rec.p_signal.T.astype(np.float32)  # (channels, time) — cast once here
 
     if sig.shape[1] < target_samples:
-        pad_width = target_samples - sig.shape[1]
-        sig = np.pad(sig, ((0, 0), (0, pad_width)))
+        sig = np.pad(sig, ((0, 0), (0, target_samples - sig.shape[1])))
 
     return sig[:, :target_samples]
 
 
-def extract_ecg_embeddings(df, config, batch_size=16):
+# =============================================================================
+# ECG-FM embedding extraction
+# =============================================================================
+
+def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
     """
     Extract 512-dim ECG-FM embeddings for each row in df by splitting each
-    10-second recording into two 5-second segments, embedding each independently,
-    and concatenating the results.
-
-    Embeddings are appended as columns emb_0 … emb_{emb_dim-1} to a copy of df,
-    aligned by positional index (not df.index) to avoid silent misalignment if
-    upstream steps dropped or reordered rows.
-
-    Failed records are filled with zeros and counted; a warning is printed at
-    the end if any failures occurred.
-
-    Args:
-        df         : DataFrame with a 'path' column; must have a contiguous
-                     integer positional index (call .reset_index(drop=True) first)
-        config     : Config dict with:
-                       config["model"]["checkpoint_path"]
-                       config["paths"]["base_records_dir"]
-                       config["model"].get("embedding_dim", 512)
-        batch_size : Number of records to embed per GPU batch (default: 16)
-
-    Returns:
-        DataFrame with embedding columns appended (same row order as input)
+    10-second recording into two 5-second segments, embedding each in a single
+    batched GPU pass, and concatenating the results.
     """
-    device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = config["model"]["checkpoint_path"]
-    base_path  = config["paths"]["base_records_dir"]
-    emb_dim    = config["model"].get("embedding_dim", 512)
+    base_path = config["paths"]["base_records_dir"]
+    emb_dim = config["model"].get("embedding_dim", 512)
+
+    if device.type == "cuda":
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
 
     model = build_model_from_checkpoint(checkpoint).to(device)
     model.eval()
 
     record_paths = _build_record_paths(df, base_path)
-    n_records    = len(record_paths)
-
-    # Pre-allocate output array — positional alignment guaranteed
+    n_records = len(record_paths)
     all_embeddings = np.zeros((n_records, emb_dim), dtype=np.float32)
-    n_failed = 0
 
-    for batch_start in tqdm(range(0, n_records, batch_size), desc="Extracting ECG embeddings"):
-        batch_end   = min(batch_start + batch_size, n_records)
-        batch_paths = record_paths[batch_start:batch_end]
+    def _load_record(args):
+        """Load and preprocess one record; returns (row_idx, seg1, seg2) or raises."""
+        row_idx, path = args
+        sig = _read_ecg_signal(path)           # (channels, 10000), float32
+        return row_idx, sig[:, :5000], sig[:, 5000:10000]
 
-        for offset, path in enumerate(batch_paths):
-            row_idx = batch_start + offset
-            try:
-                sig      = _read_ecg_signal(path)
-                first_5s = sig[:, :5000]
-                last_5s  = sig[:, 5000:10000]
+    for batch_start in tqdm(
+        range(0, n_records, batch_size), desc="Extracting ECG embeddings"
+    ):
+        batch_end = min(batch_start + batch_size, n_records)
+        batch_args = [
+            (row_idx, record_paths[row_idx])
+            for row_idx in range(batch_start, batch_end)
+        ]
 
-                x1 = torch.tensor(first_5s).float().unsqueeze(0).to(device)
-                x2 = torch.tensor(last_5s).float().unsqueeze(0).to(device)
+        # --- Parallel IO ---
+        loaded = {}   # row_idx → (seg1, seg2)
+        with ThreadPoolExecutor(max_workers=io_workers) as pool:
+            futures = {pool.submit(_load_record, args): args[0] for args in batch_args}
+            for future in as_completed(futures):
+                row_idx = futures[future]
+                idx, seg1, seg2 = future.result()
+                loaded[idx] = (seg1, seg2)
 
-                with torch.no_grad():
-                    f1 = model(source=x1, features_only=True)["features"].mean(dim=1)
-                    f2 = model(source=x2, features_only=True)["features"].mean(dim=1)
-                    emb = torch.cat([f1, f2], dim=1).cpu().numpy().flatten()
+        if not loaded:
+            continue
 
-                all_embeddings[row_idx] = emb
+        # Preserve order — sort by row_idx so embedding rows match indices
+        sorted_items = sorted(loaded.items())
+        row_indices  = [idx for idx, _ in sorted_items]
+        segs1 = np.stack([s1 for _, (s1, _) in sorted_items])  # (B, C, 5000)
+        segs2 = np.stack([s2 for _, (_, s2) in sorted_items])  # (B, C, 5000)
 
-            except Exception as e:
-                logger.warning(f"Failed to embed record {path}: {e}")
-                n_failed += 1
-                # Row stays as zeros (pre-allocated above)
+        # --- Batched GPU inference (single forward pass per segment) ---
+        x1 = torch.from_numpy(segs1).to(device)
+        x2 = torch.from_numpy(segs2).to(device)
 
-        # Free GPU memory after each batch
+        with torch.no_grad():
+            f1 = model(source=x1, features_only=True)["features"].mean(dim=1)  # (B, 256)
+            f2 = model(source=x2, features_only=True)["features"].mean(dim=1)  # (B, 256)
+            batch_embs = torch.cat([f1, f2], dim=1).cpu().numpy()               # (B, 512)
+
+        for i, row_idx in enumerate(row_indices):
+            all_embeddings[row_idx] = batch_embs[i]
+
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
-    if n_failed > 0:
-        warnings.warn(
-            f"{n_failed}/{n_records} ECG records failed to embed and were filled with zeros. "
-            "Check logs for details.",
-            UserWarning,
-        )
-
-    # Clean up model from GPU
+    # Cleanup GPU memory before returning
     model.cpu()
     del model
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
     emb_cols = [f"emb_{i}" for i in range(emb_dim)]
-    emb_df   = pd.DataFrame(all_embeddings, columns=emb_cols)  # positional index
+    emb_df = pd.DataFrame(all_embeddings, columns=emb_cols)   # positional index
 
-    # Reset df index to positional before concat to guarantee alignment
+    # reset_index on df guarantees positional alignment even if upstream dropped rows
     return pd.concat([df.reset_index(drop=True), emb_df], axis=1)
 
 
 # =============================================================================
-# Feature preparation (extends tabular_utils.prepare_model_features)
+# Feature preparation
 # =============================================================================
 
 def prepare_embedding_features(model_df):
@@ -196,16 +160,6 @@ def prepare_embedding_features(model_df):
 
     Embedding columns are treated as continuous and included in cols_to_scale
     so they are normalized alongside ECG intervals and vitals.
-
-    Args:
-        model_df : Combined model DataFrame (output of create_model_df),
-                   must already contain emb_* columns from extract_ecg_embeddings
-
-    Returns:
-        X             : Feature DataFrame
-        y             : Label DataFrame
-        y_features    : List of label column names
-        cols_to_scale : List of continuous columns to normalize (ECG + vitals + embeddings)
     """
     X, y, y_features, cols_to_scale = prepare_model_features(model_df)
 
@@ -219,7 +173,6 @@ def prepare_embedding_features(model_df):
         )
         return X, y, y_features, cols_to_scale
 
-    # Add embeddings to X and to the scale list
     emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
     X      = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
     cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
@@ -245,38 +198,15 @@ def plot_kfold_loss_curves(
     """
     Train one XGBClassifier per label using k-fold cross-validation and plot
     the mean train/validation log-loss across folds at each boosting round.
-
-    Because XGBoost trains one binary classifier per label, this function
-    produces one plot per label with n_splits fold curves plus a bold mean line
-    for both train and validation loss.
-
-    Args:
-        X            : Feature DataFrame (post-scaling)
-        y            : Label DataFrame (binary, one column per label)
-        out_path     : Directory to save plots
-        model_name   : Prefix for output filenames
-        n_splits     : Number of CV folds (default: 5)
-        n_estimators : Boosting rounds per classifier (default: 100)
-        max_depth    : XGBoost max tree depth (default: 5)
-        learning_rate: XGBoost learning rate (default: 0.1)
-        random_state : Random seed for fold splitting (default: 42)
-
-    Returns:
-        cv_results : dict mapping label name → dict with keys:
-                       "train_loss_folds"  : (n_splits, n_estimators) array
-                       "val_loss_folds"    : (n_splits, n_estimators) array
-                       "mean_train_loss"   : (n_estimators,) array
-                       "mean_val_loss"     : (n_estimators,) array
-                       "best_round"        : int, round with lowest mean val loss
     """
     Path(out_path).mkdir(parents=True, exist_ok=True)
-    X_arr = X.values
+
+    X_arr      = X.values
     cv_results = {}
 
     for label in y.columns:
         y_arr = y[label].values
 
-        # Skip labels with only one class — CV would fail
         if len(np.unique(y_arr)) < 2:
             print(f"  Skipping {label}: only one class present")
             continue
@@ -313,42 +243,29 @@ def plot_kfold_loss_curves(
 
         cv_results[label] = {
             "train_loss_folds": train_loss_folds,
-            "val_loss_folds":   val_loss_folds,
-            "mean_train_loss":  mean_train,
-            "mean_val_loss":    mean_val,
-            "best_round":       best_round,
+            "val_loss_folds": val_loss_folds,
+            "mean_train_loss": mean_train,
+            "mean_val_loss": mean_val,
+            "best_round": best_round,
         }
 
-        # --- Plot ---
         rounds = np.arange(1, n_estimators + 1)
-        short  = label.replace("label_", "").replace("report_", "")
+        short = label.replace("label_", "").replace("report_", "")
 
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        # Individual fold curves (faint)
         for fold_idx in range(n_splits):
-            ax.plot(rounds, train_loss_folds[fold_idx],
-                    color="#2E5090", alpha=0.15, linewidth=1)
-            ax.plot(rounds, val_loss_folds[fold_idx],
-                    color="#D32F2F", alpha=0.15, linewidth=1)
+            ax.plot(rounds, train_loss_folds[fold_idx], color="#2E5090", alpha=0.15, linewidth=1)
+            ax.plot(rounds, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.15, linewidth=1)
 
-        # Mean curves (bold)
-        ax.plot(rounds, mean_train,
-                color="#2E5090", linewidth=2.5, label=f"Train loss (mean)")
-        ax.plot(rounds, mean_val,
-                color="#D32F2F", linewidth=2.5, label=f"Val loss (mean)")
-
-        # Mark best round
-        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5,
-                   label=f"Best round: {best_round + 1} (val={mean_val[best_round]:.4f})")
+        ax.plot(rounds, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
+        ax.plot(rounds, mean_val,   color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val={mean_val[best_round]:.4f})")
 
         ax.set_xlabel("Boosting Round", fontsize=12)
         ax.set_ylabel("Log Loss", fontsize=12)
-        ax.set_title(
-            f"{model_name} — {short}\n"
-            f"{n_splits}-Fold CV Loss Curves",
-            fontsize=14, fontweight="bold",
-        )
+        ax.set_title(f"{model_name} — {short}\n{n_splits}-Fold CV Loss Curves", fontsize=14, fontweight="bold")
+
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -362,13 +279,12 @@ def plot_kfold_loss_curves(
     return cv_results
 
 
-
 # =============================================================================
 # Training
 # =============================================================================
 
 def _train_xgboost(X_train, y_train):
-    """Train unweighted XGBoost multi-output classifier."""
+    """Train one XGBClassifier per label (multi-output via MultiOutputClassifier)."""
     estimators = []
     for col in y_train.columns:
         clf = XGBClassifier(
@@ -383,7 +299,7 @@ def _train_xgboost(X_train, y_train):
 
     multi_xgb = MultiOutputClassifier(XGBClassifier(), n_jobs=-1)
     multi_xgb.estimators_ = estimators
-    multi_xgb.n_outputs_  = len(estimators)
+    multi_xgb.n_outputs_ = len(estimators)
     return multi_xgb
 
 
@@ -394,18 +310,6 @@ def _train_xgboost(X_train, y_train):
 def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
     """
     XGBoost pipeline with ECG-FM embeddings + StandardScaler normalization.
-
-    Steps:
-        1. Load config & data
-        2. Filter ED encounters & ECG records
-        3. Extract earliest ECG per stay
-        4. Extract ECG-FM embeddings (GPU if available)
-        5. Aggregate vitals to ECG time
-        6. Build model DataFrame
-        7. Prepare features (tabular + embeddings)
-        8. Train/test split & normalize
-        9. Train XGBoost
-        10. Evaluate & visualize
     """
     steps = [
         "Loading configuration & data",
@@ -441,7 +345,6 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
 
         pbar.set_description(steps[2])
         earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
-        # Reset index before embedding to guarantee positional alignment
         earliest_ecgs = earliest_ecgs.reset_index(drop=True)
         pbar.update(1)
 
@@ -483,7 +386,7 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
 
     except Exception as e:
         pbar.close()
-        raise e
+        raise
 
     print()
     print("✓ XGBoost embedding model complete (predicted diagnosis labels)!")

@@ -85,10 +85,6 @@ def filter_ed_ecg_records(ecg_records):
 def extract_earliest_ecg_per_stay(ecg_records_df):
     """
     Get the earliest ECG recording per ED stay with derived intervals.
-
-    Returns:
-        DataFrame with one row per ED stay containing earliest ECG and
-        derived intervals (qrs_duration, pr_interval, qt_proxy).
     """
     ecg_records_df["ecg_time"] = pd.to_datetime(ecg_records_df["ecg_time"])
     ecg_sorted = ecg_records_df.sort_values(["subject_id", "ed_stay_id", "ecg_time"])
@@ -103,15 +99,6 @@ def extract_earliest_ecg_per_stay(ecg_records_df):
 def aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours: float = 4.0):
     """
     Aggregate vital signs in a window before each stay's first ECG and merge.
-
-    Args:
-        ed_vitals: Preprocessed vitals DataFrame
-        earliest_ecgs: Earliest ECG per stay DataFrame
-        agg_window_hours: Time window before ECG to aggregate vitals
-
-    Returns:
-        DataFrame with ECG data merged with aggregated vital statistics
-        and closest-to-ECG vital readings.
     """
     ed_vitals = ed_vitals.copy()
     ed_vitals["charttime"] = pd.to_datetime(ed_vitals["charttime"])
@@ -210,12 +197,6 @@ def onehot_labels(df, label_column="labels", prefix="label_"):
 def prepare_model_features(model_df):
     """
     Prepare feature matrix X, target matrix y, and metadata for modeling.
-
-    Returns:
-        X             : feature DataFrame
-        y             : label DataFrame
-        y_features    : list of label column names
-        cols_to_scale : list of continuous column names (ECG + vitals) to normalize
     """
     model_df = onehot_labels(model_df, label_column="full_report", prefix="report_")
     model_df = onehot_labels(model_df, label_column="diagnosis_labels", prefix="label_")
@@ -255,9 +236,6 @@ def prepare_model_features(model_df):
 def create_train_test_set(model_df, X, y, test_size=0.2, random_state=42):
     """
     Patient-aware train/test split — no patient appears in both sets.
-
-    Returns:
-        X_train, X_test, y_train, y_test
     """
     groups = model_df["subject_id"].astype(int).values
     splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
@@ -280,9 +258,6 @@ def scale_features(X_train, X_test, cols_to_scale):
     Fit StandardScaler on training data only and apply to both splits.
     Only scales continuous ECG and vital sign columns; binary/categorical
     columns (report_, race_, gender_, anchor_age) are left untouched.
-
-    Returns:
-        X_train_scaled, X_test_scaled, fitted scaler
     """
     cols = [c for c in cols_to_scale if c in X_train.columns]
     scaler = StandardScaler()
@@ -308,15 +283,6 @@ def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, r
     Because SMOTE requires a single binary target, we iterate over each
     low-prevalence label, resample X/y for that label, then stitch the
     synthetic rows back into the full training set.
-
-    Args:
-        X_train              : Training feature DataFrame
-        y_train              : Training label DataFrame
-        prevalence_threshold : Labels with pos_rate below this get oversampled (default: 0.08)
-        random_state         : Random seed for reproducibility
-
-    Returns:
-        X_resampled, y_resampled : Augmented training DataFrames (index reset)
     """
     low_prev_labels = [
         col for col in y_train.columns
@@ -393,18 +359,6 @@ def evaluate_and_visualize_multilabel_model(
       - ROC + PR + aggregated confusion matrix plot
       - Label co-occurrence heatmap
       - Results CSV
-
-    Args:
-        multi_xgb      : Trained MultiOutputClassifier with XGBoost estimators
-        X_test         : Test feature DataFrame
-        y_test         : Test label DataFrame
-        y_features     : List of label column names
-        model_name     : Name used for output filenames (e.g. 'xgboost_baseline')
-        out_path       : Directory to save plots and CSV
-        label_group_name: Human-readable label group name (default: 'All N Labels')
-
-    Returns:
-        results_df: DataFrame with per-label ROC-AUC and PR-AUC metrics
     """
     Path(out_path).mkdir(parents=True, exist_ok=True)
 

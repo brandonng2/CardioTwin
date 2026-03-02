@@ -1,24 +1,10 @@
-"""
-mlp.py
-------
-Feedforward MLP baseline for multi-label cardiovascular diagnosis prediction.
-
-Uses the same data pipeline as the XGBoost models (via xgboost_utils).
-Key differences from XGBoost:
-  - StandardScaler applied after train/test split (fit on train only)
-  - BCEWithLogitsLoss with per-label pos_weight for class imbalance
-  - Early stopping on a held-out validation split
-"""
-
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
 from tqdm import tqdm
-
 import torch
 import torch.nn as nn
 from sklearn.model_selection import GroupShuffleSplit
@@ -153,21 +139,6 @@ def fit_multilabel_mlp(
 ):
     """
     Train a MultilabelMLP with BCEWithLogitsLoss and optional early stopping.
-
-    Args:
-        X_train               : Training features (ndarray or DataFrame)
-        y_train               : Training labels (ndarray or DataFrame)
-        dropout               : Dropout rate
-        pos_weight            : Per-label positive weights (ndarray, length = num_labels)
-        lr                    : Learning rate
-        epochs                : Maximum training epochs
-        batch_size            : Mini-batch size
-        device                : torch.device — auto-detected if None
-        validation_data       : Optional (X_val, y_val) tuple for early stopping
-        early_stopping_patience: Epochs to wait before stopping if val loss stalls
-
-    Returns:
-        Trained MultilabelMLP loaded with best weights
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
