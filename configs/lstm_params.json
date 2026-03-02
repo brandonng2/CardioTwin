@@ -1,0 +1,26 @@
+{
+  "paths": {
+    "in_dir": "data/processed",
+    "out_dir": "data/model_results/",
+    "base_records_dir": "/home/syamala/teams/b03/ecg/files/"
+  },
+  "sources": {
+    "clinical_encounters": "clinical_encounters_extracted.csv",
+    "vitals": "../raw/static/ed_vitals.csv",
+    "ecg_records": "ecg_data.csv"
+  },
+  "target_type": "labels",
+  "training": {
+    "epochs": 20,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "sequence_length": 16
+  },
+  "model": {
+    "hidden_size": 128,
+    "num_layers": 2,
+    "dropout": 0.3,
+    "checkpoint_path": "src/models/ecgfm_pretrained.pt",
+    "embedding_dim": 512
+  }
+}

@@ -107,12 +107,18 @@ def run_lstm_baseline(args):
     print("LSTM BASELINE MODEL")
     print("=" * 60)
 
-    config_path = "configs/xgboost_baseline_params.json"
+    # Default LSTM config path
+    config_path = "configs/lstm_params.json"
+
     config = load_config(config_path)
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
 
-    run_lstm_baseline_pipeline(in_dir, config_path, out_path)
+    # Pass target_type from config (optional, defaults to 'labels')
+    target_type = config.get("target_type", "labels")
+
+    # Pass entire config to pipeline in case model/training params needed later
+    run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 # def run_mlp_baseline(args):
 #     """Run MLP baseline model."""
