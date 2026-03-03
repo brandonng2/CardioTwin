@@ -26,6 +26,9 @@ from src.models.xgboost_baseline import (
     aggregate_vitals_to_ecg_time,
     create_model_df,
 )
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix
+from pathlib import Path
 
 # -------------------------------------------------------
 # 1️⃣ VITALS SEQUENCE CREATION
@@ -78,6 +81,7 @@ class CardiovascularDigitalTwin(nn.Module):
                  num_classes,
                  num_race,
                  num_gender,
+                 ecg_numeric_dim,
                  hidden_dim=256):
 
         super().__init__()
@@ -93,7 +97,12 @@ class CardiovascularDigitalTwin(nn.Module):
         
 
         # -------- Attention --------
-        self.attn = nn.Linear(hidden_dim, 1)
+        #self.attn = nn.Linear(hidden_dim, 1)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=4,
+            batch_first=True
+        )
         self.post_attn_dropout = nn.Dropout(0.3)
 
         # -------- Embeddings --------
@@ -107,13 +116,38 @@ class CardiovascularDigitalTwin(nn.Module):
             nn.BatchNorm1d(64),
             nn.Dropout(0.3)
         )
-        self.ecg_net = nn.Sequential(
-            nn.Linear(512, 256),
+        #self.ecg_net = nn.Sequential(
+            #nn.Linear(512, 256),
+            #nn.ReLU(),
+            #nn.BatchNorm1d(256),
+            #nn.Dropout(0.3),
+            #nn.Linear(256, 128),
+            #nn.ReLU()
+        #)
+        
+        # -------- ECG FM Embeddings --------
+        self.ecg_fm_net = nn.Sequential(
+            nn.Linear(512, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(256),
+            nn.BatchNorm1d(512),
             nn.Dropout(0.3),
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.ReLU()
+        )
+
+# -------- ECG Numeric Features --------
+        self.ecg_num_net = nn.Sequential(
+            nn.Linear(ecg_numeric_dim, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.3)
+        )
+
+    # -------- ECG Fusion --------
+        self.ecg_fusion = nn.Sequential(
+            nn.Linear(256 + 64, 128),
+            nn.ReLU(),
+            nn.BatchNorm1d(128)
         )
 
         # -------- Final Classifier --------
@@ -125,15 +159,19 @@ class CardiovascularDigitalTwin(nn.Module):
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, vitals, age, race, gender, ecg):
+        self.gate_layer = nn.Linear(hidden_dim + 64, 128)
+
+    def forward(self, vitals, age, race, gender, ecg_fm, ecg_numeric):
 
         # ---- LSTM ----
         outputs, _ = self.lstm(vitals)  # (B, T, H)
 
         # ---- Attention ----
-        attn_weights = torch.softmax(self.attn(outputs), dim=1)
+        #attn_weights = torch.softmax(self.attn(outputs), dim=1)
+        attn_out, _ = self.attn(outputs, outputs, outputs)
+        v_feat = attn_out.mean(dim=1)
         #v_feat = torch.sum(attn_weights * outputs, dim=1)
-        v_feat = torch.sum(attn_weights * outputs, dim=1)
+        #v_feat = torch.sum(attn_weights * outputs, dim=1)
         v_feat = self.post_attn_dropout(v_feat)
 
         # ---- Embeddings ----
@@ -144,8 +182,16 @@ class CardiovascularDigitalTwin(nn.Module):
 
         static_combined = torch.cat((race_feat, gender_feat, age), dim=1)
         s_feat = self.static_net(static_combined)
-        e_feat = self.ecg_net(ecg)
+        #e_feat = self.ecg_net(ecg)
+        e_fm = self.ecg_fm_net(ecg_fm)
+        e_num = self.ecg_num_net(ecg_numeric)
 
+        e_feat = self.ecg_fusion(torch.cat((e_fm, e_num), dim=1))
+
+        #combined = torch.cat((v_feat, s_feat, e_feat), dim=1)
+        fusion_input = torch.cat((v_feat, s_feat), dim=1)
+        gate = torch.sigmoid(self.gate_layer(fusion_input))
+        e_feat = e_feat * gate
         combined = torch.cat((v_feat, s_feat, e_feat), dim=1)
 
         return self.classifier(combined)
@@ -155,12 +201,15 @@ class CardiovascularDigitalTwin(nn.Module):
 # -------------------------------------------------------
 
 class TwinDataset(Dataset):
-    def __init__(self, vitals, age, race, gender, ecg_embeddings, labels):
+    def __init__(self, vitals, age, race, gender,
+                 ecg_fm, ecg_numeric, labels):
         self.vitals = torch.FloatTensor(vitals)
         self.age = torch.FloatTensor(age)
         self.race = torch.LongTensor(race)
         self.gender = torch.LongTensor(gender)
-        self.ecg_embeddings = torch.FloatTensor(ecg_embeddings)
+        #self.ecg_embeddings = torch.FloatTensor(ecg_embeddings)
+        self.ecg_fm = torch.FloatTensor(ecg_fm)
+        self.ecg_numeric = torch.FloatTensor(ecg_numeric)
         self.labels = torch.FloatTensor(labels)
 
     def __len__(self):
@@ -172,11 +221,25 @@ class TwinDataset(Dataset):
             self.age[idx],             # (1,)
             self.race[idx],            # scalar
             self.gender[idx],          # scalar
-            self.ecg_embeddings[idx],  # (512,)
+            self.ecg_fm[idx],
+            self.ecg_numeric[idx],
+            #self.ecg_embeddings[idx],  # (512,)
             self.labels[idx]           # (num_classes,)
         )
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0):
+        super().__init__()
+        self.gamma = gamma
 
+    def forward(self, logits, targets):
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none'
+        )
+        probs = torch.sigmoid(logits)
+        pt = torch.where(targets == 1, probs, 1 - probs)
+        loss = (1 - pt) ** self.gamma * bce
+        return loss.mean()
 # -------------------------------------------------------
 # 4️⃣ MAIN PIPELINE
 # -------------------------------------------------------
@@ -196,7 +259,7 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     earliest_ecgs = extract_embeddings_for_pipeline_batch_10s(earliest_ecgs, config, batch_size=64)
     ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs)
     model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
-
+    print(list(model_df.columns))
   
 
     #ecg_df = extract_embeddings_for_pipeline_batch_10s(
@@ -265,14 +328,83 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     print("ECG max:", np.nanmax(ecg_embeddings))
     print("ECG NaN count:", np.isnan(ecg_embeddings).sum())
 
+
     # Replace NaNs if present
     ecg_embeddings = np.nan_to_num(ecg_embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # ---------------- ECG NUMERIC FEATURES ----------------
+    ecg_feature_cols = [
+        'rr_interval', 'p_onset', 'p_end', 'qrs_onset', 'qrs_end',
+        't_end', 'p_axis', 'qrs_axis', 't_axis',
+        'qrs_duration', 'pr_interval', 'qt_proxy'
+    ]
+
+    # Ensure numeric
+    for col in ecg_feature_cols:
+        aligned_df[col] = pd.to_numeric(aligned_df[col], errors='coerce')
+
+    aligned_df[ecg_feature_cols] = aligned_df[ecg_feature_cols].fillna(
+        aligned_df[ecg_feature_cols].median()
+    )
+
+    ecg_numeric = aligned_df[ecg_feature_cols].values.astype(np.float32)
+
+    
 
     if isinstance(aligned_df['diagnosis_labels'].iloc[0], str):
         aligned_df['diagnosis_labels'] = aligned_df['diagnosis_labels'].apply(ast.literal_eval)
 
     mlb = MultiLabelBinarizer()
-    Y = mlb.fit_transform(aligned_df['diagnosis_labels'])
+    Y_full = mlb.fit_transform(aligned_df['diagnosis_labels'])
+
+    # -------------------------------
+    # DEFINE CARDIOVASCULAR LABEL SET
+    # -------------------------------
+
+    cardio_labels = [
+        'ami_stemi',
+        'ami_nstemi',
+        'unstable_angina_ac_ischemia',
+        'chronic_ischemic_disease',
+        'heart_failure_acute',
+        'heart_failure_chronic',
+        'afib_aflutter',
+        'ventricular_arrhythmias_arrest',
+        'supraventricular_tachyarrhythmias',
+        'brady_heart_block_conduction',
+        'valvular_endocardial_disease',
+        'cardiomyopathy_myocarditis',
+        'pericardial_disease_tamponade',
+        'pe_dvt_venous_thromboembolism',
+        'aortic_peripheral_vascular',
+        'hypertension_crisis',
+        'stroke_tia'
+    ]
+    # ----------------------------------------
+    # FILTER Y TO ONLY CARDIOVASCULAR LABELS
+    # ----------------------------------------
+
+    label_names_full = np.array(mlb.classes_)
+
+    cardio_indices = [
+        i for i, label in enumerate(label_names_full)
+        if label in cardio_labels
+    ]
+
+
+
+    Y = Y_full[:, cardio_indices]
+    # Final label names (cardio only)
+    label_names = label_names_full[cardio_indices]
+
+    print("Total labels in dataset:", len(label_names_full))
+    print("Cardiovascular labels found:", len(label_names))
+
+    missing = set(cardio_labels) - set(label_names)
+    if missing:
+        print("⚠ Missing expected cardiovascular labels:", missing)
+
+    assert len(label_names) == 17, "Not all 17 cardiovascular labels found!"
 
     subject_ids = aligned_df['subject_id'].values
     
@@ -305,6 +437,15 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     ecg_train = ecg_scaler.fit_transform(ecg_embeddings[train_idx])
     ecg_test  = ecg_scaler.transform(ecg_embeddings[test_idx])
     y_train, y_test = Y[train_idx], Y[test_idx]
+
+    # Split FIRST
+    ecg_num_train_raw = ecg_numeric[train_idx]
+    ecg_num_test_raw  = ecg_numeric[test_idx]
+
+    # Scale on TRAIN only
+    ecg_num_scaler = StandardScaler()
+    ecg_num_train = ecg_num_scaler.fit_transform(ecg_num_train_raw)
+    ecg_num_test  = ecg_num_scaler.transform(ecg_num_test_raw)
     # ----------------------------------------------------
     # Weighted Sampler for Rare Labels
     # ----------------------------------------------------
@@ -315,11 +456,11 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     sample_weights = (y_train * inv_freq).sum(axis=1)
     sample_weights = sample_weights + 1e-3  # avoid zeros
 
-    sampler = torch.utils.data.WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
+    #sampler = torch.utils.data.WeightedRandomSampler(
+       # weights=sample_weights,
+       # num_samples=len(sample_weights),
+       # replacement=True
+   # )
 
     # Static features
     # ----------------------------------------------------
@@ -387,10 +528,12 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
             race_train,
             gender_train,
             ecg_train,
+            ecg_num_train,
             y_train
         ),
         batch_size=128,
-        sampler=sampler
+        shuffle=True,
+        num_workers=4, pin_memory=True
     )
 
     val_loader = DataLoader(
@@ -400,9 +543,11 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
             race_test,
             gender_test,
             ecg_test,
+            ecg_num_test,
             y_test
         ),
-        batch_size=64
+        batch_size=64,
+        num_workers=4, pin_memory=True
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -414,14 +559,16 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
         num_classes=Y.shape[1],
         num_race=num_race,
         num_gender=num_gender,
+        ecg_numeric_dim = len(ecg_feature_cols),
         hidden_dim=256
     ).to(device)
 
-    pos_counts = torch.tensor(y_train.sum(axis=0))
-    neg_counts = len(y_train) - pos_counts
-    pos_weights = torch.clamp(neg_counts / (pos_counts + 1e-6), max=30.0)
+    #pos_counts = torch.tensor(y_train.sum(axis=0))
+    #neg_counts = len(y_train) - pos_counts
+    #pos_weights = torch.clamp(neg_counts / (pos_counts + 1e-6), max=30.0)
 
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(device))
+    #criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(device))
+    criterion = FocalLoss(gamma=2.0)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -442,16 +589,17 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
         model.train()
         train_losses = []
 
-        for v_batch, age_batch, race_batch, gender_batch, ecg_batch, y_batch in train_loader:
+        for v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch, y_batch in train_loader:
 
             v_batch = v_batch.to(device)
             age_batch = age_batch.to(device)
             race_batch = race_batch.to(device)
             gender_batch = gender_batch.to(device)
             ecg_batch = ecg_batch.to(device)
+            ecg_num_batch = ecg_num_batch.to(device)
             y_batch = y_batch.to(device)
 
-            outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch)
+            outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch)
             loss = criterion(outputs, y_batch)
 
             if torch.isnan(loss):
@@ -471,16 +619,17 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
         val_losses = []
 
         with torch.no_grad():
-            for v_batch, age_batch, race_batch, gender_batch, ecg_batch, y_batch in val_loader:
+            for v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch, y_batch in val_loader:
 
                 v_batch = v_batch.to(device)
                 age_batch = age_batch.to(device)
                 race_batch = race_batch.to(device)
                 gender_batch = gender_batch.to(device)
                 ecg_batch = ecg_batch.to(device)
+                ecg_num_batch = ecg_num_batch.to(device)
                 y_batch = y_batch.to(device)
 
-                outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch)
+                outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch)
                 val_loss = criterion(outputs, y_batch)
 
                 val_losses.append(val_loss.item())
@@ -513,13 +662,14 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     preds, true = [], []
 
     with torch.no_grad():
-        for v_batch, age_batch, race_batch, gender_batch, ecg_batch, y_batch in val_loader:
+        for v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch, y_batch in val_loader:
             v_batch = v_batch.to(device)
             age_batch = age_batch.to(device)
             race_batch = race_batch.to(device)
             gender_batch = gender_batch.to(device)
             ecg_batch = ecg_batch.to(device)
-            outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch)
+            ecg_num_batch = ecg_num_batch.to(device)
+            outputs = model(v_batch, age_batch, race_batch, gender_batch, ecg_batch, ecg_num_batch)
 
             preds.append(outputs.cpu().numpy())
             true.append(y_batch.numpy())
@@ -529,25 +679,78 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     y_pred = 1 / (1 + np.exp(-y_logits))  # sigmoid
     y_true = np.vstack(true)
 
-    print("\n" + "-"*60)
-    print(f"{'Diagnosis':<35} | {'ROC-AUC':<10} | {'PR-AUC':<10}")
-    print("-"*60)
+    from sklearn.metrics import precision_recall_curve
 
-    for i, label in enumerate(mlb.classes_):
+    optimal_thresholds = []
+
+    print("\n" + "-"*75)
+    print(f"{'Diagnosis':<35} | {'ROC':<6} | {'PR':<6} | {'Best Thresh':<10}")
+    print("-"*75)
+
+    for i, label in enumerate(label_names):
         try:
             roc = roc_auc_score(y_true[:, i], y_pred[:, i])
             pr = average_precision_score(y_true[:, i], y_pred[:, i])
-            print(f"{label:<35} | {roc:.3f}      | {pr:.3f}")
+
+            precision, recall, thresholds = precision_recall_curve(
+                y_true[:, i], y_pred[:, i]
+            )
+
+            f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+            best_idx = np.argmax(f1[:-1])  # last threshold invalid
+            best_thresh = thresholds[best_idx]
+            optimal_thresholds.append(best_thresh)
+
+            print(f"{label:<35} | {roc:.3f} | {pr:.3f} | {best_thresh:.3f}")
+
         except:
-            print(f"{label:<35} | No Positive Samples")
+            print(f"{label:<35} | No Positives")
 
     mean_roc = roc_auc_score(y_true, y_pred, average='macro')
     mean_pr = average_precision_score(y_true, y_pred, average='macro')
 
-    print("-"*60)
-    print(f"{'AVERAGE (MACRO)':<35} | {mean_roc:.3f}      | {mean_pr:.3f}")
-    print("-"*60)
+    print("-"*75)
+    print(f"{'AVERAGE (MACRO)':<35} | {mean_roc:.3f} | {mean_pr:.3f}")
+    print("-"*75)
 
     print("\n✓ LSTM baseline complete!")
+    out_dir = Path("data/model_results")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(8,6))
+
+    for i, label in enumerate(label_names):
+        if len(np.unique(y_true[:, i])) < 2:
+            continue
+        
+        fpr, tpr, _ = roc_curve(y_true[:, i], y_pred[:, i])
+        auc = roc_auc_score(y_true[:, i], y_pred[:, i])
+        plt.plot(fpr, tpr, label=f"{label} (AUC={auc:.2f})")
+
+    plt.plot([0,1],[0,1],'k--')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curves - Cardiovascular Labels")
+    plt.legend(fontsize=7)
+    plt.tight_layout()
+    plt.savefig(out_dir / "lstm_roc_curves.png")
+    plt.close()
+
+    plt.figure(figsize=(8,6))
+
+    for i, label in enumerate(label_names):
+        if len(np.unique(y_true[:, i])) < 2:
+            continue
+        
+        precision, recall, _ = precision_recall_curve(y_true[:, i], y_pred[:, i])
+        ap = average_precision_score(y_true[:, i], y_pred[:, i])
+        plt.plot(recall, precision, label=f"{label} (AP={ap:.2f})")
+
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Precision-Recall Curves - Cardiovascular Labels")
+    plt.legend(fontsize=7)
+    plt.tight_layout()
+    plt.savefig(out_dir / "lstm_pr_curves.png")
+    plt.close()
 
     return mean_roc, mean_pr
