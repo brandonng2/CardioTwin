@@ -55,11 +55,9 @@ def _read_ecg_signal(path, target_samples=10000):
     Pads with zeros if the signal is shorter than target_samples.
     """
     rec = wfdb.rdrecord(path)
-    sig = rec.p_signal.T.astype(np.float32)  # (channels, time) — cast once here
-
+    sig = rec.p_signal.T.astype(np.float32)
     if sig.shape[1] < target_samples:
         sig = np.pad(sig, ((0, 0), (0, target_samples - sig.shape[1])))
-
     return sig[:, :target_samples]
 
 
@@ -89,10 +87,13 @@ def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
     all_embeddings = np.zeros((n_records, emb_dim), dtype=np.float32)
 
     def _load_record(args):
-        """Load and preprocess one record; returns (row_idx, seg1, seg2) or raises."""
         row_idx, path = args
-        sig = _read_ecg_signal(path)           # (channels, 10000), float32
-        return row_idx, sig[:, :5000], sig[:, 5000:10000]
+        try:
+            sig = _read_ecg_signal(path)
+            return row_idx, sig[:, :5000], sig[:, 5000:10000]
+        except Exception as e:
+            logger.warning(f"Skipping record {row_idx} ({path}): {e}")
+            return None
 
     for batch_start in tqdm(
         range(0, n_records, batch_size), desc="Extracting ECG embeddings"
@@ -109,15 +110,17 @@ def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
             futures = {pool.submit(_load_record, args): args[0] for args in batch_args}
             for future in as_completed(futures):
                 row_idx = futures[future]
-                idx, seg1, seg2 = future.result()
-                loaded[idx] = (seg1, seg2)
+                result = future.result()
+                if result is not None:
+                    idx, seg1, seg2 = result
+                    loaded[idx] = (seg1, seg2)
 
         if not loaded:
             continue
 
         # Preserve order — sort by row_idx so embedding rows match indices
         sorted_items = sorted(loaded.items())
-        row_indices  = [idx for idx, _ in sorted_items]
+        row_indices = [idx for idx, _ in sorted_items]
         segs1 = np.stack([s1 for _, (s1, _) in sorted_items])  # (B, C, 5000)
         segs2 = np.stack([s2 for _, (_, s2) in sorted_items])  # (B, C, 5000)
 
@@ -166,7 +169,7 @@ def prepare_embedding_features(model_df):
     embedding_cols = [col for col in model_df.columns if col.startswith("emb_")]
 
     emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-    X      = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
+    X = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
     cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
 
     return X, y, y_features, cols_to_scale
@@ -193,7 +196,7 @@ def plot_kfold_loss_curves(
     """
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
-    X_arr      = X.values
+    X_arr = X.values
     cv_results = {}
 
     for label in y.columns:
@@ -206,7 +209,7 @@ def plot_kfold_loss_curves(
         kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
 
         train_loss_folds = np.zeros((n_splits, n_estimators))
-        val_loss_folds   = np.zeros((n_splits, n_estimators))
+        val_loss_folds = np.zeros((n_splits, n_estimators))
 
         for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_arr, y_arr)):
             X_tr, X_val = X_arr[train_idx], X_arr[val_idx]
@@ -227,10 +230,10 @@ def plot_kfold_loss_curves(
 
             evals = clf.evals_result()
             train_loss_folds[fold_idx] = evals["validation_0"]["logloss"]
-            val_loss_folds[fold_idx]   = evals["validation_1"]["logloss"]
+            val_loss_folds[fold_idx] = evals["validation_1"]["logloss"]
 
         mean_train = train_loss_folds.mean(axis=0)
-        mean_val   = val_loss_folds.mean(axis=0)
+        mean_val = val_loss_folds.mean(axis=0)
         best_round = int(np.argmin(mean_val))
 
         cv_results[label] = {
@@ -251,8 +254,8 @@ def plot_kfold_loss_curves(
             ax.plot(rounds, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.15, linewidth=1)
 
         ax.plot(rounds, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
-        ax.plot(rounds, mean_val,   color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
-        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val={mean_val[best_round]:.4f})")
+        ax.plot(rounds, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val {mean_val[best_round]:.4f})")
 
         ax.set_xlabel("Boosting Round", fontsize=12)
         ax.set_ylabel("Log Loss", fontsize=12)
