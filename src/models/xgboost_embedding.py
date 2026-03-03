@@ -193,11 +193,19 @@ def plot_kfold_loss_curves(
     """
     Train one XGBClassifier per label using k-fold cross-validation and plot
     the mean train/validation log-loss across folds at each boosting round.
+
+    Produces one PNG per label (saved in out_path/model_name/) and one overall
+    PNG averaging loss across all labels (saved in out_path/).
     """
-    Path(out_path).mkdir(parents=True, exist_ok=True)
+    label_out = Path(out_path) / model_name
+    label_out.mkdir(parents=True, exist_ok=True)
 
     X_arr = X.values
     cv_results = {}
+    rounds = np.arange(1, n_estimators + 1)
+
+    all_mean_train = []
+    all_mean_val = []
 
     for label in y.columns:
         y_arr = y[label].values
@@ -244,9 +252,11 @@ def plot_kfold_loss_curves(
             "best_round": best_round,
         }
 
-        rounds = np.arange(1, n_estimators + 1)
-        short = label.replace("label_", "").replace("report_", "")
+        all_mean_train.append(mean_train)
+        all_mean_val.append(mean_val)
 
+        # --- Per-label plot ---
+        short = label.replace("label_", "").replace("report_", "")
         fig, ax = plt.subplots(figsize=(10, 5))
 
         for fold_idx in range(n_splits):
@@ -255,22 +265,44 @@ def plot_kfold_loss_curves(
 
         ax.plot(rounds, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
         ax.plot(rounds, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
-        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val {mean_val[best_round]:.4f})")
+        ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val={mean_val[best_round]:.4f})")
 
         ax.set_xlabel("Boosting Round", fontsize=12)
         ax.set_ylabel("Log Loss", fontsize=12)
         ax.set_title(f"{model_name} — {short}\n{n_splits}-Fold CV Loss Curves", fontsize=14, fontweight="bold")
-
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_{short}.png"
+        plot_path = label_out / f"{model_name}_kfold_loss_{short}.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Saved: {plot_path}")
 
-    print(f"\nK-fold loss curves saved to '{plot_path}'")
+    # --- Overall plot ---
+    if all_mean_train:
+        overall_train = np.mean(all_mean_train, axis=0)
+        overall_val = np.mean(all_mean_val, axis=0)
+        best_round_overall = int(np.argmin(overall_val))
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(rounds, overall_train, color="#2E5090", linewidth=2.5, label="Train loss (mean across labels)")
+        ax.plot(rounds, overall_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean across labels)")
+        ax.axvline(best_round_overall + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round_overall + 1} (val={overall_val[best_round_overall]:.4f})")
+
+        ax.set_xlabel("Boosting Round", fontsize=12)
+        ax.set_ylabel("Log Loss", fontsize=12)
+        ax.set_title(f"{model_name} — Overall\n{n_splits}-Fold CV Loss Curves (averaged across {len(all_mean_train)} labels)", fontsize=14, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        overall_path = Path(out_path) / f"{model_name}_kfold_loss_overall.png"
+        plt.savefig(overall_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"  Saved: {overall_path}")
+
+    print(f"\nK-fold loss curves saved to '{out_path}'")
     return cv_results
 
 

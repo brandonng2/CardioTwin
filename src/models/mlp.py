@@ -82,8 +82,10 @@ def _to_tensor(x, device, dtype=torch.float32) -> torch.Tensor:
     if isinstance(x, torch.Tensor):
         return x.to(device=device, dtype=dtype)
     if isinstance(x, pd.DataFrame):
-        x = x.values
+        x = x.apply(pd.to_numeric, errors="coerce").fillna(0).values
     if isinstance(x, np.ndarray):
+        if x.dtype == object:
+            x = x.astype(np.float32)
         return torch.from_numpy(np.ascontiguousarray(x)).to(device=device, dtype=dtype)
     raise TypeError(f"Cannot convert type {type(x)} to tensor")
 
@@ -475,7 +477,7 @@ def evaluate_and_visualize_mlp(
 
     fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plot_path = Path(out_path) / f"{model_name}_evaluation_plots.png"
+    plot_path = Path(out_path) / model_name / f"{model_name}_evaluation_plots.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Plots saved to '{plot_path}'")
@@ -525,7 +527,7 @@ def evaluate_and_visualize_mlp(
     fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
 
-    label_cm_path = Path(out_path) / f"{model_name}_label_confusion_matrix.png"
+    label_cm_path = Path(out_path) / model_name / f"{model_name}_label_confusion_matrix.png"
     plt.savefig(label_cm_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Label co-occurrence matrix saved to '{label_cm_path}'")
@@ -541,7 +543,7 @@ def evaluate_and_visualize_mlp(
     print(f"  Recall:    {recall:.3f}")
     print(f"  F1-Score:  {f1:.3f}")
 
-    csv_path = Path(out_path) / f"{model_name}_results.csv"
+    csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
 
@@ -700,7 +702,7 @@ def plot_kfold_loss_curves(
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plot_path = Path(out_path) / f"{model_name}_kfold_loss_curves.png"
+    plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_curves.png"
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"\nK-fold loss curves saved to '{plot_path}'")
@@ -808,7 +810,7 @@ def run_mlp_base_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[8])
-        plot_kfold_loss_curves(X_train, y_train, out_path=out_path, model_name="mlp_base")
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path, model_name="mlp_baseline")
         pbar.update(1)
 
         pbar.set_description(steps[9])
@@ -816,7 +818,7 @@ def run_mlp_base_pipeline(in_dir, config_path, out_path):
         pbar.close()
 
         results_df = evaluate_and_visualize_mlp(
-            model, X_test, y_test, y_features, "mlp_base",
+            model, X_test, y_test, y_features, "mlp_baseline",
             out_path=out_path, label_group_name="Diagnosis Labels",
         )
 

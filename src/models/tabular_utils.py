@@ -466,7 +466,7 @@ def evaluate_and_visualize_multilabel_model(
 
     fig.suptitle(f"{model_name} Results", fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plot_path = Path(out_path) / f"{model_name}_evaluation_plots.png"
+    plot_path = Path(out_path) / model_name / f"{model_name}_evaluation_plots.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Plots saved to '{plot_path}'")
@@ -518,7 +518,7 @@ def evaluate_and_visualize_multilabel_model(
     fig.suptitle(f"{model_name} Results", fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
 
-    label_cm_path = Path(out_path) / f"{model_name}_label_confusion_matrix.png"
+    label_cm_path = Path(out_path) / model_name / f"{model_name}_label_confusion_matrix.png"
     plt.savefig(label_cm_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Label co-occurrence matrix saved to '{label_cm_path}'")

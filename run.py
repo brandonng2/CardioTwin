@@ -195,7 +195,7 @@ def main():
             python run.py --all --skip-static
 
             # Run XGBoost variants
-            python run.py --xgboost-base        # Baseline
+            python run.py --xgboost-baseline        # Baseline
             python run.py --xgboost-weighted    # Per-label scale_pos_weight
             python run.py --xgboost-smote       # SMOTE on rare labels
             python run.py --xgboost-embedding   # ECG-FM Embeddings
@@ -214,7 +214,7 @@ def main():
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
     parser.add_argument(
-        "--xgboost-base", action="store_true", dest="xgb_base",
+        "--xgboost-baseline", action="store_true", dest="xgb_base",
         help="Run XGBoost base model (default)",
     )
     parser.add_argument(
