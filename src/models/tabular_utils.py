@@ -535,7 +535,7 @@ def evaluate_and_visualize_multilabel_model(
     print(f"  Overall Recall:    {recall:.3f}")
     print(f"  Overall F1-Score:  {f1:.3f}")
 
-    csv_path = Path(out_path) / f"{model_name}_results.csv"
+    csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
 

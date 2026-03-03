@@ -265,12 +265,12 @@ def plot_kfold_loss_curves(
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        plot_path = Path(out_path) / f"{model_name}_kfold_loss_{short}.png"
+        plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_{short}.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Saved: {plot_path}")
 
-    print(f"\nK-fold loss curves saved to '{out_path}'")
+    print(f"\nK-fold loss curves saved to '{plot_path}'")
     return cv_results
 
 
