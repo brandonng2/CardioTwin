@@ -275,7 +275,7 @@ def scale_features(X_train, X_test, cols_to_scale):
 # SMOTE resampling (used by SMOTE variant)
 # =============================================================================
 
-def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, random_state=42):
+def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, target_ratio=0.15, random_state=42):
     """
     Apply SMOTE independently per label to training data for labels whose
     positive prevalence falls below `prevalence_threshold`.
@@ -283,6 +283,9 @@ def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, r
     Because SMOTE requires a single binary target, we iterate over each
     low-prevalence label, resample X/y for that label, then stitch the
     synthetic rows back into the full training set.
+
+    `target_ratio` sets the desired minority/majority ratio after resampling
+    (passed as sampling_strategy to SMOTE). Default 0.15 = 15%.
     """
     low_prev_labels = [
         col for col in y_train.columns
@@ -296,7 +299,7 @@ def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, r
     y_synthetic_all = []
 
     for col in low_prev_labels:
-        smote = SMOTE(random_state=random_state)
+        smote = SMOTE(sampling_strategy=target_ratio, random_state=random_state)
         X_res, y_res = smote.fit_resample(X_train, y_train[col])
 
         # Only keep the newly generated synthetic rows (appended at the end by SMOTE)
@@ -321,7 +324,7 @@ def smote_resample_low_prevalence(X_train, y_train, prevalence_threshold=0.08, r
         X_resampled = X_train.reset_index(drop=True)
         y_resampled = y_train.reset_index(drop=True)
 
-    return X_resampled, y_resampled, n_added, low_prev_labels
+    return X_resampled, y_resampled
 
 
 # =============================================================================

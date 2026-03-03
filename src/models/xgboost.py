@@ -1,6 +1,5 @@
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
-
 import warnings
 import sys
 from tqdm import tqdm
@@ -19,7 +18,6 @@ from src.models.tabular_utils import (
     create_train_test_set,
     scale_features,
     compute_scale_pos_weights,
-    smote_resample_low_prevalence,
     evaluate_and_visualize_multilabel_model,
 )
 
@@ -198,11 +196,84 @@ def run_xgboost_weighted_pipeline(in_dir, config_path, out_path):
 
 
 # =============================================================================
-# SMOTE (normalized + SMOTE on labels < 3% prevalence)
+# Capped SMOTE helper (mirrors MLP _cap_smote)
+# =============================================================================
+
+def _cap_smote(X_train, y_train, prevalence_threshold=0.03, max_prevalence=0.15, random_state=42):
+    """
+    Apply SMOTE per label with a hard cap on synthetic row generation.
+
+    For each label below `prevalence_threshold`, generates synthetic rows until
+    that label reaches `max_prevalence`. This prevents over-generation on
+    extremely rare labels.
+    """
+    import pandas as pd
+    from imblearn.over_sampling import SMOTE
+
+    n_orig = len(X_train)
+    low_prev_labels = [
+        col for col in y_train.columns
+        if y_train[col].mean() < prevalence_threshold and y_train[col].sum() > 1
+    ]
+
+    if not low_prev_labels:
+        return X_train.reset_index(drop=True), y_train.reset_index(drop=True), 0, []
+
+    X_synthetic_all = []
+    y_synthetic_all = []
+
+    for col in low_prev_labels:
+        n_pos_orig = int(y_train[col].sum())
+
+        # Solve for how many synthetic positives reach max_prevalence:
+        # max_prevalence = (n_pos_orig + n_syn) / (n_orig + n_syn)
+        # => n_syn = (max_prevalence * n_orig - n_pos_orig) / (1 - max_prevalence)
+        n_syn_cap = int((max_prevalence * n_orig - n_pos_orig) / (1.0 - max_prevalence))
+        if n_syn_cap <= 0:
+            continue  # already at or above the cap
+
+        smote = SMOTE(random_state=random_state)
+        X_res, y_res = smote.fit_resample(X_train, y_train[col])
+
+        n_synthetic = len(X_res) - n_orig
+        if n_synthetic <= 0:
+            continue
+
+        # Only keep up to n_syn_cap synthetic rows for this label
+        n_keep = min(n_synthetic, n_syn_cap)
+        X_new = pd.DataFrame(X_res[n_orig: n_orig + n_keep], columns=X_train.columns)
+
+        # Synthetic rows: positive for this label, zero for all others
+        y_new = pd.DataFrame(0, index=range(n_keep), columns=y_train.columns)
+        y_new[col] = 1
+
+        X_synthetic_all.append(X_new)
+        y_synthetic_all.append(y_new)
+
+    if X_synthetic_all:
+        X_resampled = pd.concat([X_train] + X_synthetic_all, ignore_index=True)
+        y_resampled = pd.concat([y_train] + y_synthetic_all, ignore_index=True)
+        n_added = len(X_resampled) - n_orig
+    else:
+        X_resampled = X_train.reset_index(drop=True)
+        y_resampled = y_train.reset_index(drop=True)
+        n_added = 0
+
+    return X_resampled, y_resampled, n_added, low_prev_labels
+
+
+# =============================================================================
+# SMOTE (normalized + capped oversampling on labels < 3% prevalence)
 # =============================================================================
 
 def run_xgboost_smote_pipeline(in_dir, config_path, out_path):
-    """XGBoost pipeline with StandardScaler normalization and SMOTE oversampling."""
+    """
+    XGBoost + SMOTE: normalize then oversample labels with prevalence < 3%.
+
+    Synthetic rows are capped so each smoted label reaches at most 15%
+    prevalence in the combined training set, preventing over-generation on
+    extremely rare labels.
+    """
     warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
     steps = [
@@ -213,7 +284,7 @@ def run_xgboost_smote_pipeline(in_dir, config_path, out_path):
         "Creating model dataframe",
         "Preparing features",
         "Creating train/test split & scaling",
-        "Applying SMOTE to low-prevalence labels",
+        "Applying capped SMOTE",
         "Training XGBoost model",
         "Evaluating model",
     ]
@@ -234,20 +305,30 @@ def run_xgboost_smote_pipeline(in_dir, config_path, out_path):
         X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
 
         pbar.set_description(steps[7])
-        X_train, y_train = smote_resample_low_prevalence(
-            X_train, y_train, prevalence_threshold=0.03, target_ratio=0.10,
+        X_train, y_train, n_added, smoted_labels = _cap_smote(
+            X_train, y_train,
+            prevalence_threshold=0.03,
+            max_prevalence=0.15,
+        )
+        print(
+            f"\n  SMOTE: {n_added} synthetic rows added across "
+            f"{len(smoted_labels)} labels (capped at 15% prevalence each)"
         )
         pbar.update(1)
 
         pbar.set_description(steps[8])
-        multi_xgb = MultiOutputClassifier(
-            XGBClassifier(
+        estimators = []
+        for col in y_train.columns:
+            clf = XGBClassifier(
                 n_estimators=100, max_depth=5, learning_rate=0.1,
                 eval_metric="logloss", random_state=42,
-            ),
-            n_jobs=-1,
-        )
-        multi_xgb.fit(X_train, y_train)
+            )
+            clf.fit(X_train, y_train[col])
+            estimators.append(clf)
+
+        multi_xgb = MultiOutputClassifier(XGBClassifier(), n_jobs=-1)
+        multi_xgb.estimators_ = estimators
+        multi_xgb.n_outputs_  = len(estimators)
         pbar.update(1)
 
         pbar.set_description(steps[9])
