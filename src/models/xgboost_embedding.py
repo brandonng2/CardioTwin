@@ -165,14 +165,6 @@ def prepare_embedding_features(model_df):
 
     embedding_cols = [col for col in model_df.columns if col.startswith("emb_")]
 
-    if not embedding_cols:
-        warnings.warn(
-            "No embedding columns (emb_*) found in model_df. "
-            "Did you call extract_ecg_embeddings before prepare_embedding_features?",
-            UserWarning,
-        )
-        return X, y, y_features, cols_to_scale
-
     emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
     X      = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
     cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
@@ -321,6 +313,7 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
         "Preparing features (tabular + embeddings)",
         "Train/test split & scaling",
         "Training XGBoost model",
+        "K-fold loss curves",
         "Evaluating model",
     ]
 
@@ -376,6 +369,10 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[9])
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path)
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
         pbar.update(1)
         pbar.close()
 
