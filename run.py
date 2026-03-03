@@ -1,7 +1,11 @@
 import json
 import argparse
 from pathlib import Path
-from src.models.mlp import run_mlp_baseline_pipeline
+from src.models.mlp import (
+    run_mlp_base_pipeline, 
+    run_mlp_smote_pipeline,
+    run_mlp_weighted_pipeline
+)
 from src.models.xgboost import (
     run_xgboost_base_pipeline,
     run_xgboost_weighted_pipeline,
@@ -145,7 +149,33 @@ def run_mlp_baseline(args):
     in_dir = Path(config["paths"]["in_dir"])
     out_path = Path(config["paths"]["out_dir"])
 
-    run_mlp_baseline_pipeline(in_dir, config_path, out_path)
+    run_mlp_base_pipeline(in_dir, config_path, out_path)
+
+def run_mlp_weighted(args):
+    """Run MLP weighted model."""
+    print("\n" + "=" * 60)
+    print("MLP WEIGHTED MODEL")
+    print("=" * 60)
+
+    config_path = "configs/mlp_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_mlp_weighted_pipeline(in_dir, config_path, out_path)
+
+def run_mlp_smote(args):
+    """Run MLP SMOTE model."""
+    print("\n" + "=" * 60)
+    print("MLP SMOTE MODEL")
+    print("=" * 60)
+
+    config_path = "configs/mlp_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_mlp_smote_pipeline(in_dir, config_path, out_path)
 
 
 def main():
@@ -170,8 +200,10 @@ def main():
             python run.py --xgboost-smote       # SMOTE on rare labels
             python run.py --xgboost-embedding   # ECG-FM Embeddings
             
-            # Run MLP baseline
-            python run.py --mlpbaseline
+            # Run MLP variants
+            python run.py --mlp-baseline
+            python run.py --mlp-weighted
+            python run.py --mlp-smote
         """,
     )
 
@@ -198,8 +230,16 @@ def main():
         help="Run XGBoost embedding model — Creating ECG embeddings instead of derived features",
     )
     parser.add_argument(
-        "--mlpbaseline", action="store_true", dest="mlp_baseline",
+        "--mlp-baseline", action="store_true", dest="mlp_baseline",
         help="Run MLP baseline model (predicts diagnosis labels)",
+    )
+    parser.add_argument(
+        "--mlp-weighted", action="store_true", dest="mlp_weighted",
+        help="Run MLP weighted model (per-label class weights)",
+    )
+    parser.add_argument(
+        "--mlp-smote", action="store_true", dest="mlp_smote",
+        help="Run MLP SMOTE model (SMOTE on rare labels)",
     )
 
     # Skip flags (for use with --all)
@@ -209,7 +249,9 @@ def main():
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
     parser.add_argument("--skip-xgboost-base", action="store_true", help="Skip XGBoost base model")
     parser.add_argument("--skip-xgboost-embedding", action="store_true", help="Skip XGBoost embedding model")
-    parser.add_argument("--skip-mlpbaseline", action="store_true", help="Skip MLP baseline model")
+    parser.add_argument("--skip-mlp-baseline", action="store_true", help="Skip MLP baseline model")
+    parser.add_argument("--skip-mlp-weighted", action="store_true", help="Skip MLP weighted model")
+    parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
 
     args = parser.parse_args()
 
@@ -217,7 +259,7 @@ def main():
     run_all = args.all or not any([
         args.static, args.ecg, args.vitals, args.entities,
         args.xgb_base, args.xgb_weighted, args.xgb_smote,
-        args.xgb_embedding, args.mlp_baseline
+        args.xgb_embedding, args.mlp_baseline, args.mlp_weighted, args.mlp_smote,
     ])
 
     print("=" * 60)
@@ -258,8 +300,17 @@ def main():
         run_xgboost_embedding(args)
 
     # MLP Baseline Model
-    if (run_all and not args.skip_mlpbaseline) or args.mlp_baseline:
+    if (run_all and not args.skip_mlp_baseline) or args.mlp_baseline:
         run_mlp_baseline(args)
+
+    # MLP Weighted Model
+    if (run_all and not args.skip_mlp_weighted) or args.mlp_weighted:
+        run_mlp_weighted(args)
+
+    # MLP SMOTE Model
+    if (run_all and not args.skip_mlp_smote) or args.mlp_smote:
+        run_mlp_smote(args)
+        
 
 
 if __name__ == "__main__":

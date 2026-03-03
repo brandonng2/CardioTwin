@@ -1,14 +1,14 @@
+import warnings
+import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import sys
-from tqdm import tqdm
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from sklearn.model_selection import GroupShuffleSplit
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -115,15 +115,14 @@ def predict(model, X, device, threshold=0.5, batch_size=256):
     return (predict_proba(model, X, device, batch_size) >= threshold).astype(np.int64)
 
 
-def compute_pos_weights(y_train):
-    """Compute per-label pos_weight = n_negative / n_positive for BCEWithLogitsLoss."""
+def _compute_pos_weights(y_train):
+    """Per-label pos_weight = n_negative / n_positive for BCEWithLogitsLoss."""
     weights = []
     for col in y_train.columns:
-        n_pos = y_train[col].sum()
+        n_pos = int(y_train[col].sum())
         n_neg = len(y_train) - n_pos
         weights.append(float(n_neg / n_pos) if n_pos > 0 else 1.0)
     return np.array(weights, dtype=np.float32)
-
 
 def fit_multilabel_mlp(
     X_train,
@@ -140,8 +139,7 @@ def fit_multilabel_mlp(
     """
     Train a MultilabelMLP with BCEWithLogitsLoss and optional early stopping.
     """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     X = np.asarray(X_train, dtype=np.float32)
     y = np.asarray(y_train, dtype=np.float32)
@@ -149,8 +147,7 @@ def fit_multilabel_mlp(
         y = y.reshape(-1, 1)
 
     n_features = X.shape[1]
-    num_labels  = y.shape[1]
-
+    num_labels = y.shape[1]
     pw_tensor = None
     if pos_weight is not None:
         pw = np.asarray(pos_weight, dtype=np.float32)
@@ -158,7 +155,7 @@ def fit_multilabel_mlp(
             pw_tensor = torch.from_numpy(pw).to(device)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
-    model     = MultilabelMLP(in_features=n_features, num_labels=num_labels, dropout=dropout).to(device)
+    model = MultilabelMLP(in_features=n_features, num_labels=num_labels, dropout=dropout).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     loader = torch.utils.data.DataLoader(
@@ -166,10 +163,9 @@ def fit_multilabel_mlp(
         batch_size=batch_size, shuffle=True, drop_last=False,
     )
 
-    best_val_loss   = float("inf")
-    best_state      = None
+    best_val_loss = float("inf")
+    best_state = None
     patience_counter = 0
-
     for epoch in range(epochs):
         train_loss = train_epoch(model, loader, criterion, optimizer, device)
 
@@ -178,7 +174,6 @@ def fit_multilabel_mlp(
                 best_val_loss = train_loss
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             continue
-
         X_val = np.asarray(validation_data[0], dtype=np.float32)
         y_val = np.asarray(validation_data[1], dtype=np.float32)
         if y_val.ndim == 1:
@@ -195,34 +190,31 @@ def fit_multilabel_mlp(
             for X_b, y_b in val_loader:
                 X_b, y_b = X_b.to(device), y_b.to(device)
                 val_loss += criterion(model(X_b), y_b).item() * X_b.size(0)
-                n_val += X_b.size(0)
+                n_val    += X_b.size(0)
         val_loss = val_loss / n_val if n_val else float("inf")
-
         if val_loss < best_val_loss:
-            best_val_loss    = val_loss
-            best_state       = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
         else:
             patience_counter += 1
         if patience_counter >= early_stopping_patience:
             break
-
     if best_state is not None:
         model.load_state_dict(best_state)
     return model
 
 
-def train_mlp_model(X_train, y_train, X_val=None, y_val=None):
-    """Wrap fit_multilabel_mlp with pos_weight and optional validation data."""
-    pos_weight = compute_pos_weights(y_train)
-    validation_data = (
-        (X_val.values if hasattr(X_val, "values") else X_val,
-         y_val.values if hasattr(y_val, "values") else y_val)
-        if X_val is not None else None
-    )
+def _train_mlp(X_train, y_train, X_val=None, y_val=None, use_pos_weight=False):
+    """
+    Shared training wrapper used by all three pipeline variants.
+    """
+    pos_weight = _compute_pos_weights(y_train) if use_pos_weight else None
+    validation_data = (X_val, y_val) if X_val is not None else None
+
     return fit_multilabel_mlp(
-        X_train=X_train.values if hasattr(X_train, "values") else X_train,
-        y_train=y_train.values if hasattr(y_train, "values") else y_train,
+        X_train=X_train,
+        y_train=y_train,
         dropout=0.3,
         pos_weight=pos_weight,
         lr=1e-3,
@@ -235,6 +227,72 @@ def train_mlp_model(X_train, y_train, X_val=None, y_val=None):
 
 
 # =============================================================================
+# SMOTE with 15% prevalence cap
+# =============================================================================
+
+def _cap_smote(X_train, y_train, prevalence_threshold=0.03, max_prevalence=0.15, random_state=42):
+    """
+    Apply SMOTE per label with a hard cap on synthetic row generation.
+
+    For each label below `prevalence_threshold`, generates synthetic rows until
+    that label reaches `max_prevalence`. This prevents over-generation on
+    extremely rare labels.
+    """
+    from imblearn.over_sampling import SMOTE
+
+    n_orig = len(X_train)
+    low_prev_labels = [
+        col for col in y_train.columns
+        if y_train[col].mean() < prevalence_threshold and y_train[col].sum() > 1
+    ]
+
+    if not low_prev_labels:
+        return X_train.reset_index(drop=True), y_train.reset_index(drop=True), 0, []
+
+    X_synthetic_all = []
+    y_synthetic_all = []
+
+    for col in low_prev_labels:
+        n_pos_orig = int(y_train[col].sum())
+
+        # Solve for how many synthetic positives reach max_prevalence:
+        # max_prevalence = (n_pos_orig + n_syn) / (n_orig + n_syn)
+        # => n_syn = (max_prevalence * n_orig - n_pos_orig) / (1 - max_prevalence)
+        n_syn_cap = int((max_prevalence * n_orig - n_pos_orig) / (1.0 - max_prevalence))
+        if n_syn_cap <= 0:
+            continue  # already at or above the cap
+
+        smote = SMOTE(random_state=random_state)
+        X_res, y_res = smote.fit_resample(X_train, y_train[col])
+
+        n_synthetic = len(X_res) - n_orig
+        if n_synthetic <= 0:
+            continue
+
+        # Only keep up to n_syn_cap synthetic rows for this label
+        n_keep = min(n_synthetic, n_syn_cap)
+        X_new = pd.DataFrame(X_res[n_orig: n_orig + n_keep], columns=X_train.columns)
+
+        # Synthetic rows: positive for this label, zero for all others
+        y_new = pd.DataFrame(0, index=range(n_keep), columns=y_train.columns)
+        y_new[col] = 1
+
+        X_synthetic_all.append(X_new)
+        y_synthetic_all.append(y_new)
+
+    if X_synthetic_all:
+        X_resampled = pd.concat([X_train] + X_synthetic_all, ignore_index=True)
+        y_resampled = pd.concat([y_train] + y_synthetic_all, ignore_index=True)
+        n_added = len(X_resampled) - n_orig
+    else:
+        X_resampled = X_train.reset_index(drop=True)
+        y_resampled = y_train.reset_index(drop=True)
+        n_added = 0
+
+    return X_resampled, y_resampled, n_added, low_prev_labels
+
+
+# =============================================================================
 # Evaluation & visualisation
 # =============================================================================
 
@@ -243,15 +301,15 @@ def evaluate_and_visualize_mlp(
     X_test,
     y_test,
     y_features,
+    model_name,
     out_path="../data/model_results/",
     label_group_name="Diagnosis Labels",
 ):
     """
     Evaluate MLP and produce:
-      1. ROC curves
-      2. Precision-Recall curves
-      3. Aggregated confusion matrix
-      4. Label co-occurrence heatmap
+      1. ROC + PR curves + aggregated confusion matrix  ({model_name}_evaluation_plots.png)
+      2. Label co-occurrence heatmap                    ({model_name}_label_confusion_matrix.png)
+      3. Per-label results CSV                          ({model_name}_results.csv)
     """
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
@@ -266,18 +324,18 @@ def evaluate_and_visualize_mlp(
         n_pos = y_test[target].sum()
         if y_test[target].nunique() > 1:
             auc = roc_auc_score(y_test[target], proba_matrix[:, i])
-            ap  = average_precision_score(y_test[target], proba_matrix[:, i])
+            ap = average_precision_score(y_test[target], proba_matrix[:, i])
         else:
             auc = ap = np.nan
         results.append({
-            "target":     target,
+            "target": target,
             "n_test_pos": int(n_pos),
-            "pos_rate":   y_test[target].mean(),
-            "roc_auc":    auc,
-            "pr_auc":     ap,
+            "pos_rate": y_test[target].mean(),
+            "roc_auc": auc,
+            "pr_auc": ap,
         })
 
-    results_df   = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
+    results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
     valid_labels = [l for l in y_features if y_test[l].nunique() > 1]
     print(f"\nPlotting {len(valid_labels)} labels with valid metrics")
 
@@ -285,44 +343,44 @@ def evaluate_and_visualize_mlp(
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
     for label in valid_labels:
-        idx          = list(y_features).index(label)
-        fpr, tpr, _  = roc_curve(y_test[label], proba_matrix[:, idx])
-        roc_auc      = results_df[results_df["target"] == label].iloc[0]["roc_auc"]
+        idx = list(y_features).index(label)
+        fpr, tpr, _ = roc_curve(y_test[label], proba_matrix[:, idx])
+        roc_auc = results_df[results_df["target"] == label].iloc[0]["roc_auc"]
         color = "#2E5090" if roc_auc >= 0.95 else ("#6B46C1" if roc_auc >= 0.85 else "#D32F2F")
-        alpha = 0.3       if roc_auc >= 0.95 else (0.4       if roc_auc >= 0.85 else 0.6)
+        alpha = 0.3 if roc_auc >= 0.95 else (0.4 if roc_auc >= 0.85 else 0.6)
         axes[0].plot(fpr, tpr, linewidth=1.5, alpha=alpha, color=color)
 
     axes[0].plot([0, 1], [0, 1], "k--", linewidth=2, label="Random (AUC=0.5)")
     axes[0].set_xlabel("False Positive Rate", fontsize=12)
     axes[0].set_ylabel("True Positive Rate", fontsize=12)
     axes[0].set_title(
-        f"ROC Curves for {len(valid_labels)} {label_group_name}\n"
+        f"ROC Curves — {len(valid_labels)} {label_group_name}\n"
         f"Mean AUC: {results_df['roc_auc'].mean():.3f}", fontsize=14,
     )
     axes[0].legend(loc="lower right", fontsize=10)
     axes[0].grid(True, alpha=0.3)
 
     for label in valid_labels:
-        idx          = list(y_features).index(label)
+        idx = list(y_features).index(label)
         prec, rec, _ = precision_recall_curve(y_test[label], proba_matrix[:, idx])
-        pr_auc       = results_df[results_df["target"] == label].iloc[0]["pr_auc"]
+        pr_auc = results_df[results_df["target"] == label].iloc[0]["pr_auc"]
         color = "#2E5090" if pr_auc >= 0.7 else ("#6B46C1" if pr_auc >= 0.3 else "#D32F2F")
-        alpha = 0.3       if pr_auc >= 0.7 else (0.4       if pr_auc >= 0.3 else 0.6)
+        alpha = 0.3 if pr_auc >= 0.7 else (0.4 if pr_auc >= 0.3 else 0.6)
         axes[1].plot(rec, prec, linewidth=1.5, alpha=alpha, color=color)
 
     axes[1].set_xlabel("Recall", fontsize=12)
     axes[1].set_ylabel("Precision", fontsize=12)
     axes[1].set_title(
-        f"Precision-Recall Curves for {len(valid_labels)} {label_group_name}\n"
+        f"PR Curves — {len(valid_labels)} {label_group_name}\n"
         f"Mean PR-AUC: {results_df['pr_auc'].mean():.3f}", fontsize=14,
     )
     axes[1].grid(True, alpha=0.3)
 
-    total_cm   = np.zeros((2, 2))
+    total_cm = np.zeros((2, 2))
     y_true_all = []
     y_pred_all = []
     for label in valid_labels:
-        idx      = list(y_features).index(label)
+        idx = list(y_features).index(label)
         total_cm += confusion_matrix(y_test[label], pred_matrix[:, idx])
         y_true_all.extend(y_test[label].values)
         y_pred_all.extend(pred_matrix[:, idx])
@@ -340,26 +398,27 @@ def evaluate_and_visualize_mlp(
     axes[2].set_ylabel("True Label", fontsize=12)
     axes[2].set_xlabel("Predicted Label", fontsize=12)
 
-    accuracy  = accuracy_score(y_true_all, y_pred_all)
+    accuracy = accuracy_score(y_true_all, y_pred_all)
     precision = precision_score(y_true_all, y_pred_all, zero_division=0)
-    recall    = recall_score(y_true_all, y_pred_all, zero_division=0)
-    f1        = f1_score(y_true_all, y_pred_all, zero_division=0)
+    recall = recall_score(y_true_all, y_pred_all, zero_division=0)
+    f1 = f1_score(y_true_all, y_pred_all, zero_division=0)
 
     axes[2].text(
         1.5, -0.5,
-        f"Accuracy: {accuracy:.3f}\nPrecision: {precision:.3f}\nRecall: {recall:.3f}\nF1-Score: {f1:.3f}",
+        f"Accuracy: {accuracy:.3f}\nPrecision: {precision:.3f}\nRecall: {recall:.3f}\nF1: {f1:.3f}",
         fontsize=10, bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
     )
 
+    fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plot_path = Path(out_path) / "mlp_diagnosis_evaluation_plots.png"
+    plot_path = Path(out_path) / f"{model_name}_evaluation_plots.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Plots saved to '{plot_path}'")
 
     # --- Figure 2: Label co-occurrence matrix ---
-    n_labels          = len(valid_labels)
-    label_cm          = np.zeros((n_labels, n_labels))
+    n_labels = len(valid_labels)
+    label_cm = np.zeros((n_labels, n_labels))
     y_pred_all_labels = np.zeros((len(X_np), n_labels))
 
     for idx, label in enumerate(valid_labels):
@@ -373,7 +432,7 @@ def evaluate_and_visualize_mlp(
                 label_cm[i, j] = y_pred_all_labels[positive_mask, j].sum()
 
     fig, ax = plt.subplots(figsize=(max(12, n_labels * 0.6), max(10, n_labels * 0.5)))
-    im      = ax.imshow(label_cm, cmap="Greens", aspect="auto")
+    im = ax.imshow(label_cm, cmap="Greens", aspect="auto")
 
     shortened = [l.replace("label_", "").replace("report_", "") for l in valid_labels]
     ax.set_xticks(np.arange(n_labels))
@@ -393,32 +452,32 @@ def evaluate_and_visualize_mlp(
                     ax.text(j, i, f"{count}", ha="center", va="center", color=text_color, fontsize=7)
 
     ax.set_title(
-        f"Label Co-occurrence Matrix\n{label_group_name}\n"
+        f"Label Co-occurrence Matrix — {label_group_name}\n"
         "(When true label on Y-axis is positive, how often is predicted label on X-axis positive?)",
         fontsize=13, pad=20,
     )
     ax.set_xlabel("Predicted Label", fontsize=12)
     ax.set_ylabel("True Label", fontsize=12)
+    fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
 
-    label_cm_path = Path(out_path) / "mlp_diagnosis_label_confusion_matrix.png"
+    label_cm_path = Path(out_path) / f"{model_name}_label_confusion_matrix.png"
     plt.savefig(label_cm_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Label co-occurrence matrix saved to '{label_cm_path}'")
 
     tn, fp, fn, tp = total_cm.ravel()
     print(f"\nAggregated Metrics (across all {len(valid_labels)} labels):")
-    print(f"  Total Predictions: {int(total_cm.sum())}")
     print(f"  True Negatives:  {int(tn)} ({tn / total_cm.sum() * 100:.1f}%)")
     print(f"  False Positives: {int(fp)} ({fp / total_cm.sum() * 100:.1f}%)")
     print(f"  False Negatives: {int(fn)} ({fn / total_cm.sum() * 100:.1f}%)")
     print(f"  True Positives:  {int(tp)} ({tp / total_cm.sum() * 100:.1f}%)")
-    print(f"  Overall Accuracy:  {accuracy:.3f}")
-    print(f"  Overall Precision: {precision:.3f}")
-    print(f"  Overall Recall:    {recall:.3f}")
-    print(f"  Overall F1-Score:  {f1:.3f}")
+    print(f"  Accuracy:  {accuracy:.3f}")
+    print(f"  Precision: {precision:.3f}")
+    print(f"  Recall:    {recall:.3f}")
+    print(f"  F1-Score:  {f1:.3f}")
 
-    csv_path = Path(out_path) / "mlp_diagnosis_results.csv"
+    csv_path = Path(out_path) / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
 
@@ -426,15 +485,69 @@ def evaluate_and_visualize_mlp(
 
 
 # =============================================================================
-# Main pipeline
+# Shared data loading / preparation
 # =============================================================================
 
-def run_mlp_baseline_pipeline(in_dir, config_path, out_path):
+def _load_and_prepare(in_dir, config_path, pbar, steps):
+    """Steps 0-6: load data, filter, aggregate vitals, prepare features, split, scale."""
+    pbar.set_description(steps[0])
+    config = load_config(config_path)
+    ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[1])
+    ed_encounters  = filter_ed_encounters(clinical_encounters)
+    ed_ecg_records = filter_ed_ecg_records(ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[2])
+    earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[3])
+    ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
+    pbar.update(1)
+
+    pbar.set_description(steps[4])
+    model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
+    pbar.update(1)
+
+    pbar.set_description(steps[5])
+    X, y, y_features, cols_to_scale = prepare_model_features(model_df)
+    pbar.update(1)
+
+    pbar.set_description(steps[6])
+    X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
+    X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
+    pbar.update(1)
+
+    return model_df, X_train, X_test, y_train, y_test, y_features
+
+
+def _val_split(model_df, X_train, y_train):
     """
-    End-to-end MLP pipeline predicting cardiovascular diagnosis labels.
-    Uses the same data path as the XGBoost models via xgboost_utils.
-    Key differences: StandardScaler (fit on train only), BCEWithLogitsLoss,
-    early stopping on a held-out validation split.
+    Carve a 10% patient-aware validation split for early stopping.
+    Always called on pre-SMOTE data so stopping criterion reflects real distribution.
+    """
+    val_splitter = GroupShuffleSplit(n_splits=1, test_size=0.1, random_state=0)
+    train_groups = model_df.loc[y_train.index, "subject_id"].astype(int).values
+    tr_idx, val_idx = next(val_splitter.split(X_train, y_train, groups=train_groups))
+    return (
+        X_train.iloc[tr_idx], y_train.iloc[tr_idx],
+        X_train.iloc[val_idx], y_train.iloc[val_idx],
+    )
+
+
+# =============================================================================
+# Variant 1: Base (normalized, uniform loss)
+# =============================================================================
+
+def run_mlp_base_pipeline(in_dir, config_path, out_path):
+    """
+    MLP baseline: StandardScaler normalization, uniform BCEWithLogitsLoss.
+
+    No SMOTE, no pos_weight. Establishes a clean baseline before applying
+    any class-imbalance strategies.
     """
     steps = [
         "Loading configuration & data",
@@ -443,61 +556,25 @@ def run_mlp_baseline_pipeline(in_dir, config_path, out_path):
         "Aggregating vitals to ECG time",
         "Creating model dataframe",
         "Preparing features",
-        "Creating train/test split & scaling",
-        "Training MLP model",
+        "Train/test split & scaling",
+        "Training MLP (base)",
         "Evaluating model",
     ]
 
-    print("Running MLP Baseline model...")
-    print()
-
+    print("Running MLP Base model...")
     pbar = tqdm(
         total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
         bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
     )
 
     try:
-        pbar.set_description(steps[0])
-        config = load_config(config_path)
-        ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
-        pbar.update(1)
-
-        pbar.set_description(steps[1])
-        ed_encounters  = filter_ed_encounters(clinical_encounters)
-        ed_ecg_records = filter_ed_ecg_records(ecg_records)
-        pbar.update(1)
-
-        pbar.set_description(steps[2])
-        earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
-        pbar.update(1)
-
-        pbar.set_description(steps[3])
-        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
-        pbar.update(1)
-
-        pbar.set_description(steps[4])
-        model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
-        pbar.update(1)
-
-        pbar.set_description(steps[5])
-        X, y, y_features, _, cols_to_scale = prepare_model_features(model_df)
-        pbar.update(1)
-
-        pbar.set_description(steps[6])
-        X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
-        # Scale after splitting — fit on train only to prevent data leakage
-        X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
-        pbar.update(1)
+        model_df, X_train, X_test, y_train, y_test, y_features = _load_and_prepare(
+            in_dir, config_path, pbar, steps
+        )
 
         pbar.set_description(steps[7])
-        # Carve 10% of training data as validation set for early stopping
-        val_splitter = GroupShuffleSplit(n_splits=1, test_size=0.1, random_state=0)
-        train_groups = model_df.loc[y_train.index, "subject_id"].astype(int).values
-        tr_idx, val_idx = next(val_splitter.split(X_train, y_train, groups=train_groups))
-        model = train_mlp_model(
-            X_train.iloc[tr_idx], y_train.iloc[tr_idx],
-            X_val=X_train.iloc[val_idx], y_val=y_train.iloc[val_idx],
-        )
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=False)
         pbar.update(1)
 
         pbar.set_description(steps[8])
@@ -505,7 +582,7 @@ def run_mlp_baseline_pipeline(in_dir, config_path, out_path):
         pbar.close()
 
         results_df = evaluate_and_visualize_mlp(
-            model, X_test, y_test, y_features,
+            model, X_test, y_test, y_features, "mlp_base",
             out_path=out_path, label_group_name="Diagnosis Labels",
         )
 
@@ -514,5 +591,143 @@ def run_mlp_baseline_pipeline(in_dir, config_path, out_path):
         raise e
 
     print()
-    print("✓ MLP baseline model complete (predicted diagnosis labels)!")
+    print("✓ MLP base model complete!")
+    return results_df
+
+
+# =============================================================================
+# Variant 2: SMOTE (normalized + capped oversampling)
+# =============================================================================
+
+def run_mlp_smote_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + SMOTE: normalize then oversample labels with prevalence < 3%.
+
+    Synthetic rows are capped so each smoted label reaches at most 15%
+    prevalence in the combined training set, preventing over-generation on
+    extremely rare labels.
+
+    The early-stopping validation split is carved before SMOTE so the stopping
+    criterion reflects real-world class distribution, not the synthetic one.
+    """
+    warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
+
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features",
+        "Train/test split & scaling",
+        "Applying capped SMOTE",
+        "Training MLP (SMOTE)",
+        "Evaluating model",
+    ]
+
+    print("Running MLP SMOTE model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = _load_and_prepare(
+            in_dir, config_path, pbar, steps
+        )
+
+        # Carve val split BEFORE SMOTE — val must reflect real distribution
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+
+        pbar.set_description(steps[7])
+        X_tr_s, y_tr_s, n_added, smoted_labels = _cap_smote(
+            X_tr, y_tr,
+            prevalence_threshold=0.03,
+            max_prevalence=0.15,
+        )
+        print(
+            f"\n  SMOTE: {n_added} synthetic rows added across "
+            f"{len(smoted_labels)} labels (capped at 15% prevalence each)"
+        )
+        pbar.update(1)
+
+        pbar.set_description(steps[8])
+        model = _train_mlp(X_tr_s, y_tr_s, X_val=X_val, y_val=y_val, use_pos_weight=False)
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_smote",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP SMOTE model complete!")
+    return results_df
+
+
+# =============================================================================
+# Variant 3: Weighted loss (normalized + per-label BCEWithLogitsLoss pos_weight)
+# =============================================================================
+
+def run_mlp_weighted_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + weighted loss: normalize then scale the loss by class imbalance.
+
+    Computes pos_weight = n_negative / n_positive per label and passes it to
+    BCEWithLogitsLoss, penalising false negatives on rare positive classes
+    more heavily during training. No synthetic data generation.
+    """
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features",
+        "Train/test split & scaling",
+        "Training MLP (weighted loss)",
+        "Evaluating model",
+    ]
+
+    print("Running MLP Weighted model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = _load_and_prepare(
+            in_dir, config_path, pbar, steps
+        )
+
+        pbar.set_description(steps[7])
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=True)
+        pbar.update(1)
+
+        pbar.set_description(steps[8])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_weighted",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP weighted model complete!")
     return results_df
