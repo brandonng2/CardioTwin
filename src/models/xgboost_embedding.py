@@ -92,8 +92,8 @@ def plot_kfold_loss_curves(
     y,
     out_path,
     model_name="xgboost_embedding",
-    n_splits=5,
-    n_estimators=100,
+    n_splits=3,
+    n_estimators=50,
     max_depth=5,
     learning_rate=0.1,
     random_state=42,
@@ -228,6 +228,7 @@ def _train_xgboost(X_train, y_train):
             learning_rate=0.1,
             eval_metric="logloss",
             random_state=42,
+            device="cuda",
         )
         clf.fit(X_train, y_train[col])
         estimators.append(clf)

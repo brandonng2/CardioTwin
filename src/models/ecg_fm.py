@@ -131,7 +131,8 @@ def extract_embeddings_batched(
         batch_paths = signal_paths[batch_start : batch_start + batch_size]
 
         segs1_list, segs2_list, full_list = [], [], []
-        valid_indices = []
+        valid_indices = []   # indices within the batch
+        valid_global = []    # global indices for skipped-row tracking
 
         for i, path in enumerate(batch_paths):
             try:
@@ -142,6 +143,7 @@ def extract_embeddings_batched(
                 else:
                     full_list.append(sig)
                 valid_indices.append(i)
+                valid_global.append(batch_start + i)
             except Exception as exc:
                 warnings.warn(f"Skipping {path}: {exc}")
 
@@ -173,12 +175,14 @@ def extract_embeddings_batched(
 
             batch_embs = pooled.cpu().numpy()
 
-        all_embs.append(batch_embs)
+        all_embs.append((valid_global, batch_embs))
 
     if not all_embs:
         raise RuntimeError("No embeddings extracted — check signal paths and model.")
 
-    return np.vstack(all_embs)
+    all_indices = [i for indices, _ in all_embs for i in indices]
+    all_arrays = [arr for _, arr in all_embs]
+    return np.vstack(all_arrays), all_indices
 
 
 # ---------------------------------------------------------------------------
@@ -265,16 +269,18 @@ def run_pooled_ecg_extraction(config_path: str, subject_df: pd.DataFrame) -> pd.
         )
 
     paths = subject_df["ecg_path"].tolist()
-    embs = extract_embeddings_batched(model, paths, device)
+    embs, valid_indices = extract_embeddings_batched(model, paths, device)
 
+    # Use only rows that were successfully extracted
+    subject_df_valid = subject_df.iloc[valid_indices].reset_index(drop=True)
     emb_cols = [f"emb_{i}" for i in range(embs.shape[1])]
-    emb_df = pd.DataFrame(embs, columns=emb_cols, index=subject_df.index)
+    emb_df = pd.DataFrame(embs, columns=emb_cols)
 
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    return pd.concat([subject_df.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
+    return pd.concat([subject_df_valid, emb_df], axis=1)
 
 
 def run_raw_ecg_extraction(config_path: str, subject_df: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:

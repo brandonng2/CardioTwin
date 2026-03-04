@@ -560,7 +560,7 @@ def plot_kfold_loss_curves(
     y: pd.DataFrame,
     out_path: str,
     model_name: str = "mlp",
-    n_splits: int = 5,
+    n_splits: int = 3,
     epochs: int = 100,
     early_stopping_patience: int = 10,
     dropout: float = 0.3,
@@ -1114,7 +1114,7 @@ def run_mlp_embedding_pipeline(in_dir, config_path, out_path):
 
         pbar.set_description(steps[9])
         plot_kfold_loss_curves(
-            X_train, y_train, out_path=out_path, model_name="mlp_embedding_base"
+            X_train, y_train, out_path=out_path, model_name="mlp_embedding"
         )
         pbar.update(1)
 
@@ -1123,7 +1123,7 @@ def run_mlp_embedding_pipeline(in_dir, config_path, out_path):
         pbar.close()
 
         results_df = evaluate_and_visualize_mlp(
-            model, X_test, y_test, y_features, "mlp_embedding_base",
+            model, X_test, y_test, y_features, "mlp_embedding",
             out_path=out_path, label_group_name="Diagnosis Labels",
         )
 
