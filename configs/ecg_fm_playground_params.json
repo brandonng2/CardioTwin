@@ -1,0 +1,9 @@
+{
+    "paths": {
+        "base_records_dir": "/home/b5ng/teams/b03/ecg/files"
+    },
+    "model": {
+        "checkpoint_path": "src/models/ecgfm_pretrained.pt",
+        "embedding_dim": 512
+    }
+}
