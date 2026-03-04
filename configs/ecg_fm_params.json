@@ -4,6 +4,6 @@
     },
     "model": {
         "checkpoint_path": "src/models/ecgfm_pretrained.pt",
-        "embedding_dim": 512
+        "embedding_dim": 1536
     }
 }

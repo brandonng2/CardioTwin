@@ -21,6 +21,7 @@ from sklearn.metrics import (
     f1_score,
 )
 
+from src.models.ecg_fm import run_pooled_ecg_extraction
 from src.models.tabular_utils import (
     load_config,
     load_data_files,
@@ -976,4 +977,225 @@ def run_mlp_weighted_pipeline(in_dir, config_path, out_path):
 
     print()
     print("✓ MLP weighted model complete!")
+    return results_df
+
+# =============================================================================
+# ECG-FM embedding helpers
+# =============================================================================
+
+# ECG-FM config is always loaded from ecg_fm_params.json (sibling of this file)
+from pathlib import Path as _Path
+ECG_FM_CONFIG = _Path(__file__).parent.parent.parent / "configs" / "ecg_fm_params.json"
+
+def _attach_ecg_embeddings(earliest_ecgs, xgboost_config):
+    """
+    Build ecg_path column and call run_pooled_ecg_extraction to attach
+    1536-dim embeddings (emb_0 … emb_1535) to earliest_ecgs.
+
+    ECG-FM settings always come from ecg_fm_params.json.
+    xgboost_config is only used for base_records_dir path resolution.
+    """
+    import os
+    base_path = xgboost_config["paths"]["base_records_dir"]
+    paths = []
+    for p in earliest_ecgs["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        paths.append(os.path.join(base_path, p))
+
+    subject_df = earliest_ecgs.copy().reset_index(drop=True)
+    subject_df["ecg_path"] = paths
+    return run_pooled_ecg_extraction(str(ECG_FM_CONFIG), subject_df)
+
+
+def _prepare_embedding_features(model_df):
+    """
+    Extend the base feature set with ECG-FM embedding columns (emb_0 … emb_1535).
+
+    Embedding columns are appended to X and added to cols_to_scale so they
+    are normalized alongside ECG intervals and vitals.
+    """
+    X, y, y_features, cols_to_scale = prepare_model_features(model_df)
+    embedding_cols = [col for col in model_df.columns if col.startswith("emb_")]
+    emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+    X = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
+    cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
+    return X, y, y_features, cols_to_scale
+
+
+def _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps):
+    """
+    Steps 0-7: load data, filter, extract ECG-FM embeddings, aggregate vitals,
+    prepare features with embeddings, split, scale.
+    """
+    pbar.set_description(steps[0])
+    config = load_config(config_path)
+    ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[1])
+    ed_encounters = filter_ed_encounters(clinical_encounters)
+    ed_ecg_records = filter_ed_ecg_records(ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[2])
+    earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[3])
+    earliest_ecgs = _attach_ecg_embeddings(earliest_ecgs, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[4])
+    ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(
+        ed_vitals, earliest_ecgs, agg_window_hours=4.0
+    )
+    pbar.update(1)
+
+    pbar.set_description(steps[5])
+    model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
+    pbar.update(1)
+
+    pbar.set_description(steps[6])
+    X, y, y_features, cols_to_scale = _prepare_embedding_features(model_df)
+    pbar.update(1)
+
+    pbar.set_description(steps[7])
+    X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
+    X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
+    pbar.update(1)
+
+    return model_df, X_train, X_test, y_train, y_test, y_features
+
+
+# =============================================================================
+# Variant 4: Embedding + Base (normalized, uniform loss)
+# =============================================================================
+
+def run_mlp_embedding_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + ECG-FM embeddings (1536-dim): StandardScaler normalization,
+    uniform BCEWithLogitsLoss. No SMOTE, no pos_weight.
+
+    ECG-FM config is always read from ecg_fm_params.json via
+    run_pooled_ecg_extraction. The MLP input dimension automatically
+    expands to accommodate tabular features + 1536 embedding dims.
+    """
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Extracting ECG-FM embeddings (1536-dim)",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features (tabular + embeddings)",
+        "Train/test split & scaling",
+        "Training MLP embedding (base)",
+        "K-fold loss curves",
+        "Evaluating model",
+    ]
+
+    print("Running MLP Embedding Base model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = \
+            _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps)
+
+        pbar.set_description(steps[8])
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=False)
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
+        plot_kfold_loss_curves(
+            X_train, y_train, out_path=out_path, model_name="mlp_embedding_base"
+        )
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_embedding_base",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP embedding base model complete!")
+    return results_df
+
+
+# =============================================================================
+# Variant 6: Embedding + Weighted loss
+# =============================================================================
+
+def run_mlp_embedding_weighted_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + ECG-FM embeddings (1536-dim) + per-label BCEWithLogitsLoss pos_weight.
+
+    ECG-FM config is always read from ecg_fm_params.json.
+    Computes pos_weight = n_negative / n_positive per label. No synthetic data.
+    """
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Extracting ECG-FM embeddings (1536-dim)",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features (tabular + embeddings)",
+        "Train/test split & scaling",
+        "Training MLP embedding (weighted loss)",
+        "K-fold loss curves",
+        "Evaluating model",
+    ]
+
+    print("Running MLP Embedding Weighted model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = \
+            _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps)
+
+        pbar.set_description(steps[8])
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=True)
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
+        plot_kfold_loss_curves(
+            X_train, y_train, out_path=out_path, model_name="mlp_embedding_weighted"
+        )
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_embedding_weighted",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP embedding weighted model complete!")
     return results_df

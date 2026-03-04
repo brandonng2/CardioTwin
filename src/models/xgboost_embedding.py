@@ -5,16 +5,13 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 from sklearn.multioutput import MultiOutputClassifier
 from xgboost import XGBClassifier
-import torch
-import wfdb
 from tqdm import tqdm
-from fairseq_signals.models import build_model_from_checkpoint
 
+from src.models.ecg_fm import run_pooled_ecg_extraction
 from src.models.tabular_utils import (
     load_config,
     load_data_files,
@@ -29,128 +26,39 @@ from src.models.tabular_utils import (
     evaluate_and_visualize_multilabel_model,
 )
 
+
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def _build_record_paths(df, base_path):
-    """
-    Resolve full WFDB record paths from the 'path' column in the ECG DataFrame.
-    """
-    paths = []
-    for p in df["path"]:
-        p = os.path.splitext(p)[0]
-        if p.startswith("files/"):
-            p = p[len("files/"):]
-        paths.append(os.path.join(base_path, p))
-    return paths
-
-
-def _read_ecg_signal(path, target_samples=10000):
-    """
-    Read a WFDB record and return a (channels, target_samples) float32 array.
-    Pads with zeros if the signal is shorter than target_samples.
-    """
-    rec = wfdb.rdrecord(path)
-    sig = rec.p_signal.T.astype(np.float32)
-    if sig.shape[1] < target_samples:
-        sig = np.pad(sig, ((0, 0), (0, target_samples - sig.shape[1])))
-    return sig[:, :target_samples]
+# ECG-FM config is always loaded from ecg_fm_params.json (sibling of this file)
+ECG_FM_CONFIG = Path(__file__).parent.parent.parent / "configs" / "ecg_fm_params.json"
 
 
 # =============================================================================
 # ECG-FM embedding extraction
 # =============================================================================
 
-def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
+def extract_ecg_embeddings(df, xgboost_config):
     """
-    Extract 512-dim ECG-FM embeddings for each row in df by splitting each
-    10-second recording into two 5-second segments, embedding each in a single
-    batched GPU pass, and concatenating the results.
+    Extract 1536-dim ECG-FM embeddings (2 x 768-dim segments) for each row
+    in df using run_pooled_ecg_extraction from ecg_fm_playground.
+
+    ECG-FM model settings are always read from ecg_fm_params.json — the
+    xgboost_config is only used to resolve base_records_dir for record paths.
+
+    Returns df with emb_0 … emb_1535 columns appended.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = config["model"]["checkpoint_path"]
-    base_path = config["paths"]["base_records_dir"]
-    emb_dim = config["model"].get("embedding_dim", 512)
+    base_path = xgboost_config["paths"]["base_records_dir"]
+    paths = []
+    for p in df["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        paths.append(os.path.join(base_path, p))
 
-    if device.type == "cuda":
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+    subject_df = df.copy().reset_index(drop=True)
+    subject_df["ecg_path"] = paths
 
-    model = build_model_from_checkpoint(checkpoint).to(device)
-    model.eval()
-
-    record_paths = _build_record_paths(df, base_path)
-    n_records = len(record_paths)
-    all_embeddings = np.zeros((n_records, emb_dim), dtype=np.float32)
-
-    def _load_record(args):
-        row_idx, path = args
-        try:
-            sig = _read_ecg_signal(path)
-            return row_idx, sig[:, :5000], sig[:, 5000:10000]
-        except Exception as e:
-            logger.warning(f"Skipping record {row_idx} ({path}): {e}")
-            return None
-
-    for batch_start in tqdm(
-        range(0, n_records, batch_size), desc="Extracting ECG embeddings"
-    ):
-        batch_end = min(batch_start + batch_size, n_records)
-        batch_args = [
-            (row_idx, record_paths[row_idx])
-            for row_idx in range(batch_start, batch_end)
-        ]
-
-        # --- Parallel IO ---
-        loaded = {}   # row_idx → (seg1, seg2)
-        with ThreadPoolExecutor(max_workers=io_workers) as pool:
-            futures = {pool.submit(_load_record, args): args[0] for args in batch_args}
-            for future in as_completed(futures):
-                row_idx = futures[future]
-                result = future.result()
-                if result is not None:
-                    idx, seg1, seg2 = result
-                    loaded[idx] = (seg1, seg2)
-
-        if not loaded:
-            continue
-
-        # Preserve order — sort by row_idx so embedding rows match indices
-        sorted_items = sorted(loaded.items())
-        row_indices = [idx for idx, _ in sorted_items]
-        segs1 = np.stack([s1 for _, (s1, _) in sorted_items])  # (B, C, 5000)
-        segs2 = np.stack([s2 for _, (_, s2) in sorted_items])  # (B, C, 5000)
-
-        # --- Batched GPU inference (single forward pass per segment) ---
-        x1 = torch.from_numpy(segs1).to(device)
-        x2 = torch.from_numpy(segs2).to(device)
-
-        with torch.no_grad():
-            f1 = model(source=x1, features_only=True)["features"].mean(dim=1)  # (B, 256)
-            f2 = model(source=x2, features_only=True)["features"].mean(dim=1)  # (B, 256)
-            batch_embs = torch.cat([f1, f2], dim=1).cpu().numpy()               # (B, 512)
-
-        for i, row_idx in enumerate(row_indices):
-            all_embeddings[row_idx] = batch_embs[i]
-
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-    # Cleanup GPU memory before returning
-    model.cpu()
-    del model
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-
-    emb_cols = [f"emb_{i}" for i in range(emb_dim)]
-    emb_df = pd.DataFrame(all_embeddings, columns=emb_cols)   # positional index
-
-    # reset_index on df guarantees positional alignment even if upstream dropped rows
-    return pd.concat([df.reset_index(drop=True), emb_df], axis=1)
-
+    return run_pooled_ecg_extraction(str(ECG_FM_CONFIG), subject_df)
 
 # =============================================================================
 # Feature preparation
@@ -159,7 +67,7 @@ def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
 def prepare_embedding_features(model_df):
     """
     Extend the base feature set from tabular_utils.prepare_model_features
-    with ECG-FM embedding columns (emb_0 … emb_N).
+    with ECG-FM embedding columns (emb_0 … emb_1535).
 
     Embedding columns are treated as continuous and included in cols_to_scale
     so they are normalized alongside ECG intervals and vitals.
@@ -336,7 +244,8 @@ def _train_xgboost(X_train, y_train):
 
 def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
     """
-    XGBoost pipeline with ECG-FM embeddings + StandardScaler normalization.
+    XGBoost pipeline with ECG-FM embeddings (1536-dim) + StandardScaler normalization.
+    ECG-FM config is always read from ecg_fm_params.json via run_pooled_ecg_extraction.
     """
     steps = [
         "Loading configuration & data",

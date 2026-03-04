@@ -5,8 +5,7 @@
         "base_records_dir": "/home/b5ng/teams/b03/ecg/files"
     },
     "model": {
-        "checkpoint_path": "src/models/ecgfm_pretrained.pt",
-        "embedding_dim": 512
+        "checkpoint_path": "src/models/ecgfm_pretrained.pt"
     },
     "sources": {
         "clinical_encounters": "clinical_encounters_extracted.csv",
