@@ -30,6 +30,117 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, precision_recall_curve, confusion_matrix
 from pathlib import Path
 
+# Embedding Extraction for Reference
+
+def extract_pooled_ecg_embeddings(df, config, batch_size=32, tmp_dir="/home/syamala/teams/b03/tmp_embeddings"):
+    """
+    Extract pooled ECG-FM embeddings for flat models (XGBoost / MLP).
+    Splits each record into two halves, forwards through the model, pools each half,
+    then concatenates along hidden_dim to get final embedding of shape (hidden_dim*2,).
+
+    Prints embedding dimension once before full extraction.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must have a 'path' column pointing to WFDB records.
+    config : dict
+        Must have 'checkpoint_path' and 'base_records_dir'.
+    batch_size : int
+        Number of records per batch.
+    tmp_dir : str
+        Directory to store intermediate .npy embeddings (optional).
+
+    Returns
+    -------
+    pd.DataFrame
+        Original df with columns emb_0 ... emb_{hidden_dim*2-1}
+    """
+    import os, numpy as np, torch, wfdb, pandas as pd
+    from tqdm import tqdm
+    from fairseq_signals.models import build_model_from_checkpoint
+
+    os.makedirs(tmp_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    checkpoint = config["model"]["checkpoint_path"]
+    base_path = config["paths"]["base_records_dir"]
+
+    # Load model once
+    model = build_model_from_checkpoint(checkpoint).to(device)
+    model.eval()
+
+    # Build full record paths
+    record_paths = []
+    for p in df["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        record_paths.append(os.path.join(base_path, p))
+
+    all_embeddings = []
+
+    # Probe a single record to print embedding dimension
+    try:
+        rec = wfdb.rdrecord(record_paths[0])
+        sig = rec.p_signal.T.astype(np.float32)
+        sig = sig[:, :5000] if sig.shape[1] >= 5000 else np.pad(sig, ((0,0),(0,5000-sig.shape[1])))
+        x = torch.from_numpy(sig[None, :, :]).float().to(device)
+        with torch.no_grad():
+            out = model(source=x)
+        hidden_dim = out["features"].shape[-1]
+        print(f"Each pooled half embedding dim = {hidden_dim}, final concatenated embedding dim = {hidden_dim*2}")
+    except:
+        print("Could not probe embedding dimension. Check first record path or model.")
+
+    # Process in batches
+    for batch_start in tqdm(range(0, len(record_paths), batch_size), desc="Extracting ECG embeddings"):
+        batch_paths = record_paths[batch_start : batch_start + batch_size]
+        segs1_list, segs2_list = [], []
+
+        for path in batch_paths:
+            try:
+                rec = wfdb.rdrecord(path)
+                sig = rec.p_signal.T.astype(np.float32)
+                if sig.shape[1] < 10000:
+                    sig = np.pad(sig, ((0,0),(0,10000-sig.shape[1])))
+                sig = sig[:, :10000]
+                # Split 10s into two halves
+                segs1_list.append(sig[:, :5000])
+                segs2_list.append(sig[:, 5000:])
+            except:
+                # If record fails, pad with zeros
+                print("It failed")
+                segs1_list.append(np.zeros((12,5000)))
+                segs2_list.append(np.zeros((12,5000)))
+
+        if not segs1_list:
+            continue
+
+        # Forward through model
+        x = torch.from_numpy(
+            np.concatenate([np.stack(segs1_list), np.stack(segs2_list)], axis=0)
+            ).float().to(device)   # <-- ensures FloatTensor (float32) on GPU
+        with torch.no_grad():
+            out = model(source=x)
+            features = out["features"]  # (2*B, seq_len, hidden_dim)
+            # Mean-pool over seq_len
+            pooled = features.mean(dim=1)  # (2*B, hidden_dim)
+        B = len(segs1_list)
+        f1, f2 = pooled[:B], pooled[B:]
+        batch_embs = torch.cat([f1, f2], dim=1).cpu().numpy()  # (B, hidden_dim*2)
+        all_embeddings.append(batch_embs)
+
+        # Free memory
+        del x, features, pooled, f1, f2, batch_embs
+        torch.cuda.empty_cache()
+
+    all_embeddings = np.vstack(all_embeddings)
+    emb_cols = [f"emb_{i}" for i in range(all_embeddings.shape[1])]
+    emb_df = pd.DataFrame(all_embeddings, columns=emb_cols, index=df.index)
+
+    return pd.concat([df, emb_df], axis=1)
+
 # -------------------------------------------------------
 # 1️⃣ VITALS SEQUENCE CREATION
 # -------------------------------------------------------
@@ -82,7 +193,7 @@ class CardiovascularDigitalTwin(nn.Module):
                  num_race,
                  num_gender,
                  ecg_numeric_dim,
-                 hidden_dim=256):
+                 hidden_dim=384):
 
         super().__init__()
 
@@ -90,7 +201,7 @@ class CardiovascularDigitalTwin(nn.Module):
         self.lstm = nn.LSTM(
             input_size=vital_dim,
             hidden_size=hidden_dim,
-            num_layers=2,
+            num_layers=3,
             batch_first=True,
             dropout=0.3
         )
@@ -127,7 +238,11 @@ class CardiovascularDigitalTwin(nn.Module):
         
         # -------- ECG FM Embeddings --------
         self.ecg_fm_net = nn.Sequential(
-            nn.Linear(512, 512),
+            nn.Linear(1536, 1024),
+            nn.ReLU(),
+            nn.BatchNorm1d(1024),
+            nn.Dropout(0.4),
+            nn.Linear(1024, 512),
             nn.ReLU(),
             nn.BatchNorm1d(512),
             nn.Dropout(0.3),
@@ -169,7 +284,7 @@ class CardiovascularDigitalTwin(nn.Module):
         # ---- Attention ----
         #attn_weights = torch.softmax(self.attn(outputs), dim=1)
         attn_out, _ = self.attn(outputs, outputs, outputs)
-        v_feat = attn_out.mean(dim=1)
+        v_feat = torch.sum(attn_out * torch.softmax(attn_out.mean(dim=2), dim=1).unsqueeze(-1), dim=1)
         #v_feat = torch.sum(attn_weights * outputs, dim=1)
         #v_feat = torch.sum(attn_weights * outputs, dim=1)
         v_feat = self.post_attn_dropout(v_feat)
@@ -228,9 +343,10 @@ class TwinDataset(Dataset):
         )
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0):
+    def __init__(self, gamma=2.0, alpha=None):
         super().__init__()
         self.gamma = gamma
+        self.alpha = alpha
 
     def forward(self, logits, targets):
         bce = nn.functional.binary_cross_entropy_with_logits(
@@ -238,14 +354,21 @@ class FocalLoss(nn.Module):
         )
         probs = torch.sigmoid(logits)
         pt = torch.where(targets == 1, probs, 1 - probs)
-        loss = (1 - pt) ** self.gamma * bce
+
+        focal_term = (1 - pt) ** self.gamma
+
+        if self.alpha is not None:
+            alpha_factor = torch.where(targets == 1, self.alpha, 1 - self.alpha)
+            focal_term = focal_term * alpha_factor
+
+        loss = focal_term * bce
         return loss.mean()
 # -------------------------------------------------------
 # 4️⃣ MAIN PIPELINE
 # -------------------------------------------------------
 
 def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="labels"):
-    from src.models.xgboost_baseline import extract_embeddings_for_pipeline_batch_10s
+    from src.models.xgboost_baseline import extract_pooled_ecg_embeddings
     print("\nRunning LSTM Baseline model...\n")
 
     config = load_config(config_path)
@@ -256,7 +379,7 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
           # ---------------- ECG EMBEDDINGS ----------------
     print("\nExtracting ECG-FM embeddings...\n")
-    earliest_ecgs = extract_embeddings_for_pipeline_batch_10s(earliest_ecgs, config, batch_size=64)
+    earliest_ecgs = extract_pooled_ecg_embeddings(earliest_ecgs, config, batch_size=32)
     ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs)
     model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
     print(list(model_df.columns))
@@ -286,11 +409,11 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     
     # ---------------- ALIGN ECG EMBEDDINGS ----------------
     ecg_df = earliest_ecgs.set_index("ed_stay_id")
-    emb_cols = [f"emb_{i}" for i in range(512)]
+    emb_cols = [f"emb_{i}" for i in range(1536)]
     missing_ids = [pid for pid in patient_list if pid not in ecg_df.index]
     if missing_ids:
         print(f"⚠ Warning: {len(missing_ids)} patients missing ECG embeddings. Filling zeros.")
-        zero_emb = np.zeros(512, dtype=np.float32)
+        zero_emb = np.zeros(1536, dtype=np.float32)
         ecg_embeddings = np.array([
             ecg_df.loc[pid, emb_cols].values.astype(np.float32) if pid in ecg_df.index else zero_emb
             for pid in patient_list
@@ -560,15 +683,17 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
         num_race=num_race,
         num_gender=num_gender,
         ecg_numeric_dim = len(ecg_feature_cols),
-        hidden_dim=256
+        hidden_dim=384
     ).to(device)
 
-    #pos_counts = torch.tensor(y_train.sum(axis=0))
-    #neg_counts = len(y_train) - pos_counts
-    #pos_weights = torch.clamp(neg_counts / (pos_counts + 1e-6), max=30.0)
+    pos_counts = torch.tensor(y_train.sum(axis=0))
+    neg_counts = len(y_train) - pos_counts
 
-    #criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weights.to(device))
-    criterion = FocalLoss(gamma=2.0)
+    alpha = neg_counts / (pos_counts + neg_counts)
+    alpha = alpha.to(device)
+
+    criterion = FocalLoss(gamma=2.0, alpha=alpha)
+
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -679,78 +804,79 @@ def run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type="label
     y_pred = 1 / (1 + np.exp(-y_logits))  # sigmoid
     y_true = np.vstack(true)
 
-    from sklearn.metrics import precision_recall_curve
+    import seaborn as sns
+    from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+    roc_scores = []
+    pr_scores = []
 
-    optimal_thresholds = []
+    for i in range(y_true.shape[1]):
+        if len(np.unique(y_true[:, i])) > 1:
+            roc_scores.append(roc_auc_score(y_true[:, i], y_pred[:, i]))
+            pr_scores.append(average_precision_score(y_true[:, i], y_pred[:, i]))
 
-    print("\n" + "-"*75)
-    print(f"{'Diagnosis':<35} | {'ROC':<6} | {'PR':<6} | {'Best Thresh':<10}")
-    print("-"*75)
+    mean_roc = np.mean(roc_scores)
+    mean_pr = np.mean(pr_scores)
 
-    for i, label in enumerate(label_names):
-        try:
-            roc = roc_auc_score(y_true[:, i], y_pred[:, i])
-            pr = average_precision_score(y_true[:, i], y_pred[:, i])
+    valid_labels = [
+        label for i, label in enumerate(label_names)
+        if len(np.unique(y_true[:, i])) > 1
+    ]
 
-            precision, recall, thresholds = precision_recall_curve(
-                y_true[:, i], y_pred[:, i]
-            )
+    fig, axes = plt.subplots(1, 3, figsize=(22, 7))
 
-            f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
-            best_idx = np.argmax(f1[:-1])  # last threshold invalid
-            best_thresh = thresholds[best_idx]
-            optimal_thresholds.append(best_thresh)
+    # ---------------- ROC ----------------
+    for i, label in enumerate(valid_labels):
+        idx = list(label_names).index(label)
+        fpr, tpr, _ = roc_curve(y_true[:, idx], y_pred[:, idx])
+        auc = roc_auc_score(y_true[:, idx], y_pred[:, idx])
 
-            print(f"{label:<35} | {roc:.3f} | {pr:.3f} | {best_thresh:.3f}")
+        color = "#2E5090" if auc >= 0.9 else ("#6B46C1" if auc >= 0.8 else "#D32F2F")
+        axes[0].plot(fpr, tpr, linewidth=2, alpha=0.6, color=color)
 
-        except:
-            print(f"{label:<35} | No Positives")
+    axes[0].plot([0,1],[0,1],'k--', linewidth=2)
+    axes[0].set_title(f"ROC Curves\nMean AUC: {mean_roc:.3f}", fontsize=14)
+    axes[0].set_xlabel("False Positive Rate")
+    axes[0].set_ylabel("True Positive Rate")
+    axes[0].grid(True, alpha=0.3)
 
-    mean_roc = roc_auc_score(y_true, y_pred, average='macro')
-    mean_pr = average_precision_score(y_true, y_pred, average='macro')
+    # ---------------- PR ----------------
+    for i, label in enumerate(valid_labels):
+        idx = list(label_names).index(label)
+        prec, rec, _ = precision_recall_curve(y_true[:, idx], y_pred[:, idx])
+        ap = average_precision_score(y_true[:, idx], y_pred[:, idx])
 
-    print("-"*75)
-    print(f"{'AVERAGE (MACRO)':<35} | {mean_roc:.3f} | {mean_pr:.3f}")
-    print("-"*75)
+        color = "#2E5090" if ap >= 0.5 else ("#6B46C1" if ap >= 0.25 else "#D32F2F")
+        axes[1].plot(rec, prec, linewidth=2, alpha=0.6, color=color)
 
-    print("\n✓ LSTM baseline complete!")
-    out_dir = Path("data/model_results")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(8,6))
+    axes[1].set_title(f"Precision-Recall Curves\nMean PR-AUC: {mean_pr:.3f}", fontsize=14)
+    axes[1].set_xlabel("Recall")
+    axes[1].set_ylabel("Precision")
+    axes[1].grid(True, alpha=0.3)
 
-    for i, label in enumerate(label_names):
-        if len(np.unique(y_true[:, i])) < 2:
-            continue
-        
-        fpr, tpr, _ = roc_curve(y_true[:, i], y_pred[:, i])
-        auc = roc_auc_score(y_true[:, i], y_pred[:, i])
-        plt.plot(fpr, tpr, label=f"{label} (AUC={auc:.2f})")
+    # ---------------- Confusion Matrix ----------------
+    y_pred_bin = (y_pred > 0.5).astype(int)
 
-    plt.plot([0,1],[0,1],'k--')
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curves - Cardiovascular Labels")
-    plt.legend(fontsize=7)
+    total_cm = np.zeros((2,2))
+    for i in range(len(valid_labels)):
+        idx = list(label_names).index(valid_labels[i])
+        total_cm += confusion_matrix(y_true[:, idx], y_pred_bin[:, idx])
+
+    sns.heatmap(
+        total_cm,
+        annot=True,
+        fmt=".0f",
+        cmap="Blues",
+        ax=axes[2],
+        xticklabels=["Negative", "Positive"],
+        yticklabels=["Negative", "Positive"],
+        cbar=False
+    )
+
+    axes[2].set_title("Aggregated Confusion Matrix")
+    axes[2].set_xlabel("Predicted")
+    axes[2].set_ylabel("True")
+
+    fig.suptitle("LSTM Cardiovascular Digital Twin Results", fontsize=16, fontweight="bold")
     plt.tight_layout()
-    plt.savefig(out_dir / "lstm_roc_curves.png")
+    plt.savefig("data/model_results/lstm_poster_plot.png", dpi=400, bbox_inches="tight")
     plt.close()
-
-    plt.figure(figsize=(8,6))
-
-    for i, label in enumerate(label_names):
-        if len(np.unique(y_true[:, i])) < 2:
-            continue
-        
-        precision, recall, _ = precision_recall_curve(y_true[:, i], y_pred[:, i])
-        ap = average_precision_score(y_true[:, i], y_pred[:, i])
-        plt.plot(recall, precision, label=f"{label} (AP={ap:.2f})")
-
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title("Precision-Recall Curves - Cardiovascular Labels")
-    plt.legend(fontsize=7)
-    plt.tight_layout()
-    plt.savefig(out_dir / "lstm_pr_curves.png")
-    plt.close()
-
-    return mean_roc, mean_pr
