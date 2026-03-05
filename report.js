@@ -1,5 +1,3 @@
-/* D3.js vital signs background + scroll animations + stat counters */
-/* Version 2.0 - Updated to use external CSV file */
 import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm";
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -308,11 +306,13 @@ function initDeathsChart() {
   if (!container || typeof d3 === "undefined") return;
 
   // Load CSV data from file
-  d3.csv("misc/top_10_causes_of_death.csv").then((data) => {
-    renderDeathsChart(data, container);
-  }).catch((error) => {
-    console.error("Error loading CSV:", error);
-  });
+  d3.csv("misc/top_10_causes_of_death.csv")
+    .then((data) => {
+      renderDeathsChart(data, container);
+    })
+    .catch((error) => {
+      console.error("Error loading CSV:", error);
+    });
 }
 
 function renderDeathsChart(data, container) {
@@ -320,32 +320,40 @@ function renderDeathsChart(data, container) {
 
   // Filter to keep only the top 5 causes by total deaths in 2023
   const causeTotals = Array.from(grouped.entries()).map(([cause, values]) => {
-    const latest = values.find(d => d.year === "2023");
+    const latest = values.find((d) => d.year === "2023");
     return {
       cause,
-      total: latest ? +latest.deaths : 0
+      total: latest ? +latest.deaths : 0,
     };
   });
-  
+
   // Sort and keep top 5
   const topCauses = causeTotals
     .sort((a, b) => b.total - a.total)
     .slice(0, 5)
-    .map(d => d.cause);
-  
+    .map((d) => d.cause);
+
   // Filter grouped data to only include top causes
   const filteredGrouped = new Map(
-    Array.from(grouped.entries()).filter(([cause]) => topCauses.includes(cause))
+    Array.from(grouped.entries()).filter(([cause]) =>
+      topCauses.includes(cause),
+    ),
   );
 
   // 5-stop gradient: coral-pink → magenta → indigo → blue → mint
-  const colorScale = d3.piecewise(d3.interpolateHsl, ["#ff6482", "#e040fb", "#5e5af2", "#5e8ef7", "#00d4aa"]);
+  const colorScale = d3.piecewise(d3.interpolateHsl, [
+    "#ff6482",
+    "#e040fb",
+    "#5e5af2",
+    "#5e8ef7",
+    "#00d4aa",
+  ]);
 
   const causes = Array.from(filteredGrouped.keys());
   const colorMap = {};
 
   // Assign gradient colors, with Cardiovascular diseases always at index 0 (primary pink)
-  const nonCardio = causes.filter(c => c !== "Cardiovascular diseases");
+  const nonCardio = causes.filter((c) => c !== "Cardiovascular diseases");
   const allCauses = causes.includes("Cardiovascular diseases")
     ? ["Cardiovascular diseases", ...nonCardio]
     : causes;
@@ -355,7 +363,7 @@ function renderDeathsChart(data, container) {
     colorMap[cause] = colorScale(t);
   });
 
-  const margin = { top: 30, right: 30, bottom: 90, left: 70 };
+  const margin = { top: 30, right: 30, bottom: 110, left: 70 };
   let svg = null;
   let chartElements = null;
 
@@ -364,7 +372,7 @@ function renderDeathsChart(data, container) {
     d3.select(container).selectAll("*").remove();
 
     const containerWidth = container.offsetWidth;
-    const containerHeight = 450;
+    const containerHeight = container.offsetHeight || 550;
     const width = containerWidth - margin.left - margin.right;
     const height = containerHeight - margin.top - margin.bottom;
 
@@ -434,7 +442,8 @@ function renderDeathsChart(data, container) {
       .curve(d3.curveMonotoneX);
 
     // Create tooltip
-    const tooltip = d3.select("body")
+    const tooltip = d3
+      .select("body")
       .append("div")
       .attr("class", "chart-tooltip")
       .style("position", "absolute")
@@ -481,83 +490,99 @@ function renderDeathsChart(data, container) {
         .attr("stroke-width", 20)
         .attr("d", line)
         .style("cursor", "pointer")
-        .on("mouseover", function(event) {
+        .on("mouseover", function (event) {
           // Highlight the line
-          path.style("opacity", 1).attr("stroke-width", cause === "Cardiovascular diseases" ? 4 : 3.5);
+          path
+            .style("opacity", 1)
+            .attr(
+              "stroke-width",
+              cause === "Cardiovascular diseases" ? 4 : 3.5,
+            );
           tooltip.style("visibility", "visible");
         })
-        .on("mousemove", function(event) {
+        .on("mousemove", function (event) {
           // Find closest data point
           const [mouseX] = d3.pointer(event, svg.node());
           const year = Math.round(x.invert(mouseX));
-          const dataPoint = sortedValues.find(d => +d.year === year) || sortedValues[0];
-          
+          const dataPoint =
+            sortedValues.find((d) => +d.year === year) || sortedValues[0];
+
           const deaths = (+dataPoint.deaths / 1000000).toFixed(2);
-          
+
           tooltip
-            .html(`
+            .html(
+              `
               <div style="font-weight: 600; color: ${colorMap[cause]}; margin-bottom: 6px;">${cause}</div>
               <div style="color: #1d1d1f;"><strong>Year:</strong> ${dataPoint.year}</div>
               <div style="color: #1d1d1f;"><strong>Deaths:</strong> ${deaths}M</div>
-            `)
-            .style("top", (event.pageY - 10) + "px")
-            .style("left", (event.pageX + 10) + "px");
+            `,
+            )
+            .style("top", event.pageY - 10 + "px")
+            .style("left", event.pageX + 10 + "px");
         })
-        .on("mouseout", function() {
-          path.style("opacity", 0.85).attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5);
+        .on("mouseout", function () {
+          path
+            .style("opacity", 0.85)
+            .attr(
+              "stroke-width",
+              cause === "Cardiovascular diseases" ? 3 : 2.5,
+            );
           tooltip.style("visibility", "hidden");
         });
     });
 
-    // Add horizontal legend below the chart with 2-2-1 layout
+    // Add horizontal legend below the chart — centered, 3 rows: 2-2-1
+    const legendItemWidth = 200;
+    const legendRowHeight = 22;
+    const legendEntries = Object.entries(colorMap);
+    const rows = [
+      legendEntries.slice(0, 2),
+      legendEntries.slice(2, 4),
+      legendEntries.slice(4),
+    ].filter((r) => r.length > 0);
+
     const legend = svg
       .append("g")
-      .attr("transform", `translate(0, ${height + 55})`);
+      .attr("transform", `translate(0, ${height + 60})`);
 
-    Object.entries(colorMap).forEach(([cause, color], i) => {
-      let xPos, yPos;
-      
-      if (i < 2) {
-        // First row (2 items) - -30 and 180
-        xPos = i === 0 ? -30 : 180;
-        yPos = 0;
-      } else if (i < 4) {
-        // Second row (2 items) - -30 and 180
-        const secondRowIndex = i - 2;
-        xPos = secondRowIndex === 0 ? -30 : 180;
-        yPos = 24;
-      } else {
-        // Third row (1 item) - -30
-        xPos = -30;
-        yPos = 48;
-      }
-      
-      const g = legend
-        .append("g")
-        .attr("transform", `translate(${xPos}, ${yPos})`)
-        .style("opacity", 0);
+    rows.forEach((row, rowIdx) => {
+      const rowWidth = row.length * legendItemWidth;
+      const rowStartX = (width - rowWidth) / 2;
 
-      g.append("line")
-        .attr("x1", 0)
-        .attr("x2", 24)
-        .attr("y1", 0)
-        .attr("y2", 0)
-        .attr("stroke", color)
-        .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5);
+      row.forEach(([cause, color], colIdx) => {
+        const g = legend
+          .append("g")
+          .attr(
+            "transform",
+            `translate(${rowStartX + colIdx * legendItemWidth}, ${rowIdx * legendRowHeight})`,
+          )
+          .style("opacity", 0);
 
-      g.append("text")
-        .attr("x", 30)
-        .attr("y", 4)
-        .text(cause)
-        .style("font-size", "12px")
-        .style("fill", "#1d1d1f")
-        .style("font-weight", cause === "Cardiovascular diseases" ? "600" : "400");
+        g.append("line")
+          .attr("x1", 0)
+          .attr("x2", 24)
+          .attr("y1", 0)
+          .attr("y2", 0)
+          .attr("stroke", color)
+          .attr("stroke-width", cause === "Cardiovascular diseases" ? 3 : 2.5);
 
-      // Fade in legend items
-      g.transition()
-        .delay(500 + i * 100)
-        .duration(500)
-        .style("opacity", 1);
+        g.append("text")
+          .attr("x", 30)
+          .attr("y", 4)
+          .text(cause)
+          .style("font-size", "12px")
+          .style("fill", "#1d1d1f")
+          .style(
+            "font-weight",
+            cause === "Cardiovascular diseases" ? "600" : "400",
+          );
+
+        const globalIdx = legendEntries.findIndex(([c]) => c === cause);
+        g.transition()
+          .delay(500 + globalIdx * 100)
+          .duration(500)
+          .style("opacity", 1);
+      });
     });
   };
 

@@ -118,28 +118,36 @@
     <section id="how-it-works" class="section animate-on-scroll">
       <h2 class="section-title">How It Works</h2>
       <div class="pipeline-visual">
-        <div class="pipeline-step animate-on-scroll">
-          <div class="step-icon">📋</div>
-          <h3>Static</h3>
-          <p>Demographics, admissions, comorbidities</p>
+        <div class="pipeline-node pipeline-node-1 animate-on-scroll" data-color="pink">
+          <div class="pipeline-node-inner">
+            <span class="pipeline-node-label">Static</span>
+          </div>
+          <div class="pipeline-node-sub">MIMIC-IV</div>
+          <div class="pipeline-node-tooltip">Demographics, admissions, comorbidities</div>
         </div>
-        <div class="pipeline-connector"></div>
-        <div class="pipeline-step animate-on-scroll">
-          <div class="step-icon">📈</div>
-          <h3>ECG</h3>
-          <p>Signals + machine measurements</p>
+        <div class="pipeline-arrow pipeline-arrow-1">→</div>
+        <div class="pipeline-node pipeline-node-2 animate-on-scroll" data-color="blue">
+          <div class="pipeline-node-inner">
+            <span class="pipeline-node-label">ECG</span>
+          </div>
+          <div class="pipeline-node-sub">MIMIC-IV-ECG</div>
+          <div class="pipeline-node-tooltip">Waveform signals + machine measurements</div>
         </div>
-        <div class="pipeline-connector"></div>
-        <div class="pipeline-step animate-on-scroll">
-          <div class="step-icon">💓</div>
-          <h3>Vitals</h3>
-          <p>Time-series vital signs</p>
+        <div class="pipeline-arrow pipeline-arrow-2">→</div>
+        <div class="pipeline-node pipeline-node-3 animate-on-scroll" data-color="gray">
+          <div class="pipeline-node-inner">
+            <span class="pipeline-node-label">Vitals</span>
+          </div>
+          <div class="pipeline-node-sub">MIMIC-IV-ED</div>
+          <div class="pipeline-node-tooltip">Time-series vital signs from ED visits</div>
         </div>
-        <div class="pipeline-connector"></div>
-        <div class="pipeline-step animate-on-scroll">
-          <div class="step-icon">🏷️</div>
-          <h3>Labels</h3>
-          <p>ICD-10 cardiovascular codes</p>
+        <div class="pipeline-arrow pipeline-arrow-3">→</div>
+        <div class="pipeline-node pipeline-node-4 animate-on-scroll" data-color="gold">
+          <div class="pipeline-node-inner">
+            <span class="pipeline-node-label">Labels</span>
+          </div>
+          <div class="pipeline-node-sub">ICD-10</div>
+          <div class="pipeline-node-tooltip">Cardiovascular diagnosis codes (AFib, HF, MI…)</div>
         </div>
       </div>
       <p class="section-description">Our model integrates multiple clinical data streams into a unified patient
@@ -263,18 +271,21 @@
               </a>
             </div>
           </div>
-          <div class="team-card">
-            <img src="" alt="Samuel Eun" class="team-photo">
+        </div>
+
+        <div class="mentor-divider">
+          <span class="mentor-divider-label">Faculty Mentor</span>
+        </div>
+        <div class="mentor-grid">
+          <div class="team-card mentor-card">
+            <img src="misc/mentor.jpg" alt="Rahman Tauhidur" class="team-photo">
             <div class="team-info">
-              <h3 class="team-name">Samuel Eun</h3>
-              <p class="team-meta">UC San Diego · Data Science</p>
-              <a href="https://www.linkedin.com/in/samuel-eun/" target="_blank" class="team-linkedin">
-                <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
-                  <path
-                    d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
-                </svg>
-                LinkedIn
-              </a>
+              <h3 class="team-name">Rahman Tauhidur</h3>
+              <p class="team-meta">UC San Diego · MOSAIC Lab</p>
+              <div class="mentor-links">
+                <a href="https://www.tauhidurrahman.com/" target="_blank" class="mentor-link">Personal Site</a>
+                <a href="https://mosaic-laboratory.github.io/" target="_blank" class="mentor-link">MOSAIC Lab</a>
+              </div>
             </div>
           </div>
         </div>
