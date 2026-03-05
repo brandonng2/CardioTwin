@@ -1,8 +1,8 @@
 {
     "paths": {
         "in_dir": "data/processed/",
-        "out_dir": "data/model_results/",
-        "base_records_dir": "data/processed/data/processed/files/"
+        "out_dir": "model_results/",
+        "base_records_dir": "/home/b5ng/teams/b03/ecg/files"
     },
     "model": {
         "checkpoint_path": "src/models/ecgfm_pretrained.pt",
