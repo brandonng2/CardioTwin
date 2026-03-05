@@ -5,16 +5,13 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 from sklearn.multioutput import MultiOutputClassifier
 from xgboost import XGBClassifier
-import torch
-import wfdb
 from tqdm import tqdm
-from fairseq_signals.models import build_model_from_checkpoint
 
+from src.models.ecg_fm import run_pooled_ecg_extraction
 from src.models.tabular_utils import (
     load_config,
     load_data_files,
@@ -29,125 +26,39 @@ from src.models.tabular_utils import (
     evaluate_and_visualize_multilabel_model,
 )
 
+
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def _build_record_paths(df, base_path):
-    """
-    Resolve full WFDB record paths from the 'path' column in the ECG DataFrame.
-    """
-    paths = []
-    for p in df["path"]:
-        p = os.path.splitext(p)[0]
-        if p.startswith("files/"):
-            p = p[len("files/"):]
-        paths.append(os.path.join(base_path, p))
-    return paths
-
-
-def _read_ecg_signal(path, target_samples=10000):
-    """
-    Read a WFDB record and return a (channels, target_samples) float32 array.
-    Pads with zeros if the signal is shorter than target_samples.
-    """
-    rec = wfdb.rdrecord(path)
-    sig = rec.p_signal.T.astype(np.float32)  # (channels, time) — cast once here
-
-    if sig.shape[1] < target_samples:
-        sig = np.pad(sig, ((0, 0), (0, target_samples - sig.shape[1])))
-
-    return sig[:, :target_samples]
+# ECG-FM config is always loaded from ecg_fm_params.json (sibling of this file)
+ECG_FM_CONFIG = Path(__file__).parent.parent.parent / "configs" / "ecg_fm_params.json"
 
 
 # =============================================================================
 # ECG-FM embedding extraction
 # =============================================================================
 
-def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
+def extract_ecg_embeddings(df, xgboost_config):
     """
-    Extract 512-dim ECG-FM embeddings for each row in df by splitting each
-    10-second recording into two 5-second segments, embedding each in a single
-    batched GPU pass, and concatenating the results.
+    Extract 1536-dim ECG-FM embeddings (2 x 768-dim segments) for each row
+    in df using run_pooled_ecg_extraction from ecg_fm_playground.
+
+    ECG-FM model settings are always read from ecg_fm_params.json — the
+    xgboost_config is only used to resolve base_records_dir for record paths.
+
+    Returns df with emb_0 … emb_1535 columns appended.
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = config["model"]["checkpoint_path"]
-    base_path = config["paths"]["base_records_dir"]
-    emb_dim = config["model"].get("embedding_dim", 512)
+    base_path = xgboost_config["paths"]["base_records_dir"]
+    paths = []
+    for p in df["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        paths.append(os.path.join(base_path, p))
 
-    if device.type == "cuda":
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+    subject_df = df.copy().reset_index(drop=True)
+    subject_df["ecg_path"] = paths
 
-    model = build_model_from_checkpoint(checkpoint).to(device)
-    model.eval()
-
-    record_paths = _build_record_paths(df, base_path)
-    n_records = len(record_paths)
-    all_embeddings = np.zeros((n_records, emb_dim), dtype=np.float32)
-
-    def _load_record(args):
-        """Load and preprocess one record; returns (row_idx, seg1, seg2) or raises."""
-        row_idx, path = args
-        sig = _read_ecg_signal(path)           # (channels, 10000), float32
-        return row_idx, sig[:, :5000], sig[:, 5000:10000]
-
-    for batch_start in tqdm(
-        range(0, n_records, batch_size), desc="Extracting ECG embeddings"
-    ):
-        batch_end = min(batch_start + batch_size, n_records)
-        batch_args = [
-            (row_idx, record_paths[row_idx])
-            for row_idx in range(batch_start, batch_end)
-        ]
-
-        # --- Parallel IO ---
-        loaded = {}   # row_idx → (seg1, seg2)
-        with ThreadPoolExecutor(max_workers=io_workers) as pool:
-            futures = {pool.submit(_load_record, args): args[0] for args in batch_args}
-            for future in as_completed(futures):
-                row_idx = futures[future]
-                idx, seg1, seg2 = future.result()
-                loaded[idx] = (seg1, seg2)
-
-        if not loaded:
-            continue
-
-        # Preserve order — sort by row_idx so embedding rows match indices
-        sorted_items = sorted(loaded.items())
-        row_indices  = [idx for idx, _ in sorted_items]
-        segs1 = np.stack([s1 for _, (s1, _) in sorted_items])  # (B, C, 5000)
-        segs2 = np.stack([s2 for _, (_, s2) in sorted_items])  # (B, C, 5000)
-
-        # --- Batched GPU inference (single forward pass per segment) ---
-        x1 = torch.from_numpy(segs1).to(device)
-        x2 = torch.from_numpy(segs2).to(device)
-
-        with torch.no_grad():
-            f1 = model(source=x1, features_only=True)["features"].mean(dim=1)  # (B, 256)
-            f2 = model(source=x2, features_only=True)["features"].mean(dim=1)  # (B, 256)
-            batch_embs = torch.cat([f1, f2], dim=1).cpu().numpy()               # (B, 512)
-
-        for i, row_idx in enumerate(row_indices):
-            all_embeddings[row_idx] = batch_embs[i]
-
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
-    # Cleanup GPU memory before returning
-    model.cpu()
-    del model
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-
-    emb_cols = [f"emb_{i}" for i in range(emb_dim)]
-    emb_df = pd.DataFrame(all_embeddings, columns=emb_cols)   # positional index
-
-    # reset_index on df guarantees positional alignment even if upstream dropped rows
-    return pd.concat([df.reset_index(drop=True), emb_df], axis=1)
-
+    return run_pooled_ecg_extraction(str(ECG_FM_CONFIG), subject_df)
 
 # =============================================================================
 # Feature preparation
@@ -156,7 +67,7 @@ def extract_ecg_embeddings(df, config, batch_size=64, io_workers=8):
 def prepare_embedding_features(model_df):
     """
     Extend the base feature set from tabular_utils.prepare_model_features
-    with ECG-FM embedding columns (emb_0 … emb_N).
+    with ECG-FM embedding columns (emb_0 … emb_1535).
 
     Embedding columns are treated as continuous and included in cols_to_scale
     so they are normalized alongside ECG intervals and vitals.
@@ -165,16 +76,8 @@ def prepare_embedding_features(model_df):
 
     embedding_cols = [col for col in model_df.columns if col.startswith("emb_")]
 
-    if not embedding_cols:
-        warnings.warn(
-            "No embedding columns (emb_*) found in model_df. "
-            "Did you call extract_ecg_embeddings before prepare_embedding_features?",
-            UserWarning,
-        )
-        return X, y, y_features, cols_to_scale
-
     emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-    X      = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
+    X = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
     cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
 
     return X, y, y_features, cols_to_scale
@@ -189,8 +92,8 @@ def plot_kfold_loss_curves(
     y,
     out_path,
     model_name="xgboost_embedding",
-    n_splits=5,
-    n_estimators=100,
+    n_splits=3,
+    n_estimators=50,
     max_depth=5,
     learning_rate=0.1,
     random_state=42,
@@ -198,11 +101,19 @@ def plot_kfold_loss_curves(
     """
     Train one XGBClassifier per label using k-fold cross-validation and plot
     the mean train/validation log-loss across folds at each boosting round.
-    """
-    Path(out_path).mkdir(parents=True, exist_ok=True)
 
-    X_arr      = X.values
+    Produces one PNG per label (saved in out_path/model_name/) and one overall
+    PNG averaging loss across all labels (saved in out_path/).
+    """
+    label_out = Path(out_path) / model_name
+    label_out.mkdir(parents=True, exist_ok=True)
+
+    X_arr = X.values
     cv_results = {}
+    rounds = np.arange(1, n_estimators + 1)
+
+    all_mean_train = []
+    all_mean_val = []
 
     for label in y.columns:
         y_arr = y[label].values
@@ -214,7 +125,7 @@ def plot_kfold_loss_curves(
         kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
 
         train_loss_folds = np.zeros((n_splits, n_estimators))
-        val_loss_folds   = np.zeros((n_splits, n_estimators))
+        val_loss_folds = np.zeros((n_splits, n_estimators))
 
         for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_arr, y_arr)):
             X_tr, X_val = X_arr[train_idx], X_arr[val_idx]
@@ -235,10 +146,10 @@ def plot_kfold_loss_curves(
 
             evals = clf.evals_result()
             train_loss_folds[fold_idx] = evals["validation_0"]["logloss"]
-            val_loss_folds[fold_idx]   = evals["validation_1"]["logloss"]
+            val_loss_folds[fold_idx] = evals["validation_1"]["logloss"]
 
         mean_train = train_loss_folds.mean(axis=0)
-        mean_val   = val_loss_folds.mean(axis=0)
+        mean_val = val_loss_folds.mean(axis=0)
         best_round = int(np.argmin(mean_val))
 
         cv_results[label] = {
@@ -249,9 +160,11 @@ def plot_kfold_loss_curves(
             "best_round": best_round,
         }
 
-        rounds = np.arange(1, n_estimators + 1)
-        short = label.replace("label_", "").replace("report_", "")
+        all_mean_train.append(mean_train)
+        all_mean_val.append(mean_val)
 
+        # --- Per-label plot ---
+        short = label.replace("label_", "").replace("report_", "")
         fig, ax = plt.subplots(figsize=(10, 5))
 
         for fold_idx in range(n_splits):
@@ -259,21 +172,43 @@ def plot_kfold_loss_curves(
             ax.plot(rounds, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.15, linewidth=1)
 
         ax.plot(rounds, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
-        ax.plot(rounds, mean_val,   color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+        ax.plot(rounds, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
         ax.axvline(best_round + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round + 1} (val={mean_val[best_round]:.4f})")
 
         ax.set_xlabel("Boosting Round", fontsize=12)
         ax.set_ylabel("Log Loss", fontsize=12)
         ax.set_title(f"{model_name} — {short}\n{n_splits}-Fold CV Loss Curves", fontsize=14, fontweight="bold")
-
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        plot_path = Path(out_path) / f"{model_name}_kfold_loss_{short}.png"
+        plot_path = label_out / f"{model_name}_kfold_loss_{short}.png"
         plt.savefig(plot_path, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"  Saved: {plot_path}")
+
+    # --- Overall plot ---
+    if all_mean_train:
+        overall_train = np.mean(all_mean_train, axis=0)
+        overall_val = np.mean(all_mean_val, axis=0)
+        best_round_overall = int(np.argmin(overall_val))
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(rounds, overall_train, color="#2E5090", linewidth=2.5, label="Train loss (mean across labels)")
+        ax.plot(rounds, overall_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean across labels)")
+        ax.axvline(best_round_overall + 1, color="gray", linestyle="--", linewidth=1.5, label=f"Best round: {best_round_overall + 1} (val={overall_val[best_round_overall]:.4f})")
+
+        ax.set_xlabel("Boosting Round", fontsize=12)
+        ax.set_ylabel("Log Loss", fontsize=12)
+        ax.set_title(f"{model_name} — Overall\n{n_splits}-Fold CV Loss Curves (averaged across {len(all_mean_train)} labels)", fontsize=14, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        overall_path = Path(out_path) / f"{model_name}_kfold_loss_overall.png"
+        plt.savefig(overall_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"  Saved: {overall_path}")
 
     print(f"\nK-fold loss curves saved to '{out_path}'")
     return cv_results
@@ -293,6 +228,7 @@ def _train_xgboost(X_train, y_train):
             learning_rate=0.1,
             eval_metric="logloss",
             random_state=42,
+            device="cuda",
         )
         clf.fit(X_train, y_train[col])
         estimators.append(clf)
@@ -309,7 +245,8 @@ def _train_xgboost(X_train, y_train):
 
 def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
     """
-    XGBoost pipeline with ECG-FM embeddings + StandardScaler normalization.
+    XGBoost pipeline with ECG-FM embeddings (1536-dim) + StandardScaler normalization.
+    ECG-FM config is always read from ecg_fm_params.json via run_pooled_ecg_extraction.
     """
     steps = [
         "Loading configuration & data",
@@ -321,6 +258,7 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
         "Preparing features (tabular + embeddings)",
         "Train/test split & scaling",
         "Training XGBoost model",
+        "K-fold loss curves",
         "Evaluating model",
     ]
 
@@ -376,6 +314,10 @@ def run_xgboost_embedding_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[9])
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path)
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
         pbar.update(1)
         pbar.close()
 

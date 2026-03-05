@@ -4,7 +4,8 @@ from pathlib import Path
 from src.models.mlp import (
     run_mlp_base_pipeline, 
     run_mlp_smote_pipeline,
-    run_mlp_weighted_pipeline
+    run_mlp_weighted_pipeline,
+    run_mlp_embedding_pipeline
 )
 from src.models.xgboost import (
     run_xgboost_base_pipeline,
@@ -177,6 +178,19 @@ def run_mlp_smote(args):
 
     run_mlp_smote_pipeline(in_dir, config_path, out_path)
 
+def run_mlp_embedding(args):
+    """Run MLP Embeddings model."""
+    print("\n" + "=" * 60)
+    print("MLP EMBEDDINGS MODEL")
+    print("=" * 60)
+
+    config_path = "configs/mlp_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_mlp_embedding_pipeline(in_dir, config_path, out_path)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -195,7 +209,7 @@ def main():
             python run.py --all --skip-static
 
             # Run XGBoost variants
-            python run.py --xgboost-base        # Baseline
+            python run.py --xgboost-baseline    # Baseline
             python run.py --xgboost-weighted    # Per-label scale_pos_weight
             python run.py --xgboost-smote       # SMOTE on rare labels
             python run.py --xgboost-embedding   # ECG-FM Embeddings
@@ -204,6 +218,7 @@ def main():
             python run.py --mlp-baseline
             python run.py --mlp-weighted
             python run.py --mlp-smote
+            python run.py --mlp-embedding
         """,
     )
 
@@ -214,7 +229,7 @@ def main():
     parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run entity extraction")
     parser.add_argument(
-        "--xgboost-base", action="store_true", dest="xgb_base",
+        "--xgboost-baseline", action="store_true", dest="xgb_base",
         help="Run XGBoost base model (default)",
     )
     parser.add_argument(
@@ -241,6 +256,10 @@ def main():
         "--mlp-smote", action="store_true", dest="mlp_smote",
         help="Run MLP SMOTE model (SMOTE on rare labels)",
     )
+    parser.add_argument(
+        "--mlp-embedding", action="store_true", dest="mlp_embedding",
+        help="Run MLP embedding model — Creating ECG embeddings instead of derived features",
+    )
 
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
@@ -252,14 +271,15 @@ def main():
     parser.add_argument("--skip-mlp-baseline", action="store_true", help="Skip MLP baseline model")
     parser.add_argument("--skip-mlp-weighted", action="store_true", help="Skip MLP weighted model")
     parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
+    parser.add_argument("--skip-mlp-embedding", action="store_true", help="Skip MLP embedding model")
 
     args = parser.parse_args()
 
     # Determine what to run
     run_all = args.all or not any([
         args.static, args.ecg, args.vitals, args.entities,
-        args.xgb_base, args.xgb_weighted, args.xgb_smote,
-        args.xgb_embedding, args.mlp_baseline, args.mlp_weighted, args.mlp_smote,
+        args.xgb_base, args.xgb_weighted, args.xgb_smote, args.xgb_embedding, 
+        args.mlp_baseline, args.mlp_weighted, args.mlp_smote, args.mlp_embedding,
     ])
 
     print("=" * 60)
@@ -311,7 +331,10 @@ def main():
     if (run_all and not args.skip_mlp_smote) or args.mlp_smote:
         run_mlp_smote(args)
         
-
+    # MLP EMBEDDING Model
+    if (run_all and not args.skip_mlp_embedding) or args.mlp_embedding:
+        run_mlp_embedding(args)
+        
 
 if __name__ == "__main__":
     main()

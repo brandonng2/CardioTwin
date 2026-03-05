@@ -114,7 +114,7 @@ def run_xgboost_base_pipeline(in_dir, config_path, out_path):
         pbar.close()
 
         results_df = evaluate_and_visualize_multilabel_model(
-            multi_xgb, X_test, y_test, y_features, "xgboost_base",
+            multi_xgb, X_test, y_test, y_features, "xgboost_baseline",
             out_path=out_path, label_group_name="Diagnosis Labels",
         )
 

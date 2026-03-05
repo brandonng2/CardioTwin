@@ -8,7 +8,7 @@ import seaborn as sns
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, StratifiedKFold
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -21,6 +21,7 @@ from sklearn.metrics import (
     f1_score,
 )
 
+from src.models.ecg_fm import run_pooled_ecg_extraction
 from src.models.tabular_utils import (
     load_config,
     load_data_files,
@@ -49,7 +50,7 @@ class MultilabelMLP(nn.Module):
     def __init__(self, in_features: int, num_labels: int, dropout: float = 0.3):
         super().__init__()
         self.in_features = in_features
-        self.num_labels  = num_labels
+        self.num_labels = num_labels
 
         self.backbone = nn.Sequential(
             nn.Linear(in_features, 256),
@@ -74,22 +75,43 @@ class MultilabelMLP(nn.Module):
 
 
 # =============================================================================
+# Tensor conversion helpers
+# =============================================================================
+
+def _to_tensor(x, device, dtype=torch.float32) -> torch.Tensor:
+    """Convert numpy array, DataFrame, or existing tensor to a typed tensor on device."""
+    if isinstance(x, torch.Tensor):
+        return x.to(device=device, dtype=dtype)
+    if isinstance(x, pd.DataFrame):
+        x = x.apply(pd.to_numeric, errors="coerce").fillna(0).values
+    if isinstance(x, np.ndarray):
+        if x.dtype == object:
+            x = x.astype(np.float32)
+        return torch.from_numpy(np.ascontiguousarray(x)).to(device=device, dtype=dtype)
+    raise TypeError(f"Cannot convert type {type(x)} to tensor")
+
+
+def _as_float_tensor(x) -> torch.Tensor:
+    """Return a CPU float32 tensor without moving to any particular device."""
+    return _to_tensor(x, device="cpu", dtype=torch.float32)
+
+
+# =============================================================================
 # Low-level training utilities
 # =============================================================================
 
-def _to_tensor(x, device, dtype=torch.float32):
-    if isinstance(x, np.ndarray):
-        return torch.from_numpy(x).to(device=device, dtype=dtype)
-    if hasattr(x, "values"):
-        return torch.from_numpy(x.values).to(device=device, dtype=dtype)
-    return x.to(device=device, dtype=dtype)
-
-
-def train_epoch(model, loader, criterion, optimizer, device):
+def train_epoch(
+    model: nn.Module,
+    loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> float:
     model.train()
     total_loss, n = 0.0, 0
     for X_batch, y_batch in loader:
-        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+        X_batch = X_batch.to(device)
+        y_batch = y_batch.to(device)
         optimizer.zero_grad()
         loss = criterion(model(X_batch), y_batch)
         loss.backward()
@@ -99,116 +121,155 @@ def train_epoch(model, loader, criterion, optimizer, device):
     return total_loss / n if n else 0.0
 
 
-def predict_proba(model, X, device, batch_size=256):
-    """Return sigmoid probability matrix (n_samples, num_labels)."""
+def predict_proba(
+    model: nn.Module,
+    X: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Return sigmoid probability matrix as a CPU float tensor (n_samples, num_labels)."""
     model.eval()
-    probs = []
+    if not isinstance(X, torch.Tensor):
+        X = _as_float_tensor(X)
+    chunks = []
     with torch.no_grad():
-        for i in range(0, len(X), batch_size):
-            batch = _to_tensor(X[i: i + batch_size], device)
-            probs.append(torch.sigmoid(model(batch)).cpu().numpy())
-    return np.vstack(probs)
+        for i in range(0, X.size(0), batch_size):
+            batch = X[i : i + batch_size].to(device)
+            chunks.append(torch.sigmoid(model(batch)).cpu())
+    return torch.cat(chunks, dim=0) # (n_samples, num_labels)
 
 
-def predict(model, X, device, threshold=0.5, batch_size=256):
-    """Return binary predictions (n_samples, num_labels)."""
-    return (predict_proba(model, X, device, batch_size) >= threshold).astype(np.int64)
+def predict(
+    model: nn.Module,
+    X: torch.Tensor,
+    device: torch.device,
+    threshold: float = 0.5,
+    batch_size: int = 256,
+) -> torch.Tensor:
+    """Return binary predictions as a CPU int64 tensor (n_samples, num_labels)."""
+    return (predict_proba(model, X, device, batch_size) >= threshold).to(torch.int64)
 
 
-def _compute_pos_weights(y_train):
+def _compute_pos_weights(y_train: pd.DataFrame) -> torch.Tensor:
     """Per-label pos_weight = n_negative / n_positive for BCEWithLogitsLoss."""
     weights = []
     for col in y_train.columns:
         n_pos = int(y_train[col].sum())
         n_neg = len(y_train) - n_pos
         weights.append(float(n_neg / n_pos) if n_pos > 0 else 1.0)
-    return np.array(weights, dtype=np.float32)
+    return torch.tensor(weights, dtype=torch.float32) # CPU tensor; moved in fit_multilabel_mlp
+
+
+def _make_tensor_loader(
+    X: torch.Tensor,
+    y: torch.Tensor,
+    batch_size: int,
+    shuffle: bool,
+) -> torch.utils.data.DataLoader:
+    """Build a DataLoader from two tensors already on CPU."""
+    return torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(X, y),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=False,
+    )
+
 
 def fit_multilabel_mlp(
     X_train,
     y_train,
-    dropout=0.3,
+    dropout: float = 0.3,
     pos_weight=None,
-    lr=1e-3,
-    epochs=100,
-    batch_size=64,
-    device=None,
+    lr: float = 1e-3,
+    epochs: int = 100,
+    batch_size: int = 64,
+    device: torch.device = None,
     validation_data=None,
-    early_stopping_patience=10,
-):
+    early_stopping_patience: int = 10,
+) -> MultilabelMLP:
     """
     Train a MultilabelMLP with BCEWithLogitsLoss and optional early stopping.
+    All internal data is kept as torch.Tensor throughout training.
     """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    X = np.asarray(X_train, dtype=np.float32)
-    y = np.asarray(y_train, dtype=np.float32)
-    if y.ndim == 1:
-        y = y.reshape(-1, 1)
+    # --- Convert training data to tensors once ---
+    X_t = _as_float_tensor(X_train) # (n, features)
+    y_t = _as_float_tensor(y_train) # (n, labels)
+    if y_t.dim() == 1:
+        y_t = y_t.unsqueeze(1)
 
-    n_features = X.shape[1]
-    num_labels = y.shape[1]
+    n_features = X_t.size(1)
+    num_labels = y_t.size(1)
+
+    # --- pos_weight ---
     pw_tensor = None
     if pos_weight is not None:
-        pw = np.asarray(pos_weight, dtype=np.float32)
-        if pw.ndim == 1 and len(pw) == num_labels:
-            pw_tensor = torch.from_numpy(pw).to(device)
+        if isinstance(pos_weight, torch.Tensor):
+            pw_tensor = pos_weight.to(device=device, dtype=torch.float32)
+        else:
+            pw = np.asarray(pos_weight, dtype=np.float32)
+            if pw.ndim == 1 and len(pw) == num_labels:
+                pw_tensor = torch.from_numpy(pw).to(device)
 
     criterion = nn.BCEWithLogitsLoss(pos_weight=pw_tensor)
-    model = MultilabelMLP(in_features=n_features, num_labels=num_labels, dropout=dropout).to(device)
+    model = MultilabelMLP(
+        in_features=n_features, num_labels=num_labels, dropout=dropout
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
-    loader = torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(torch.from_numpy(X), torch.from_numpy(y)),
-        batch_size=batch_size, shuffle=True, drop_last=False,
-    )
+    train_loader = _make_tensor_loader(X_t, y_t, batch_size=batch_size, shuffle=True)
+
+    # --- Pre-build validation loader if provided ---
+    val_loader = None
+    if validation_data is not None:
+        X_val_t = _as_float_tensor(validation_data[0])
+        y_val_t = _as_float_tensor(validation_data[1])
+        if y_val_t.dim() == 1:
+            y_val_t = y_val_t.unsqueeze(1)
+        val_loader = _make_tensor_loader(X_val_t, y_val_t, batch_size=batch_size, shuffle=False)
 
     best_val_loss = float("inf")
     best_state = None
     patience_counter = 0
-    for epoch in range(epochs):
-        train_loss = train_epoch(model, loader, criterion, optimizer, device)
 
-        if validation_data is None:
+    for _ in range(epochs):
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
+
+        if val_loader is None:
+            # No validation set — track training loss for best-state bookkeeping
             if best_state is None or train_loss < best_val_loss:
                 best_val_loss = train_loss
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             continue
-        X_val = np.asarray(validation_data[0], dtype=np.float32)
-        y_val = np.asarray(validation_data[1], dtype=np.float32)
-        if y_val.ndim == 1:
-            y_val = y_val.reshape(-1, 1)
 
-        val_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val)),
-            batch_size=batch_size, shuffle=False,
-        )
-
+        # --- Validation pass ---
         model.eval()
         val_loss, n_val = 0.0, 0
         with torch.no_grad():
             for X_b, y_b in val_loader:
                 X_b, y_b = X_b.to(device), y_b.to(device)
                 val_loss += criterion(model(X_b), y_b).item() * X_b.size(0)
-                n_val    += X_b.size(0)
+                n_val += X_b.size(0)
         val_loss = val_loss / n_val if n_val else float("inf")
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
         else:
             patience_counter += 1
+
         if patience_counter >= early_stopping_patience:
             break
+
     if best_state is not None:
         model.load_state_dict(best_state)
     return model
 
 
-def _train_mlp(X_train, y_train, X_val=None, y_val=None, use_pos_weight=False):
-    """
-    Shared training wrapper used by all three pipeline variants.
-    """
+def _train_mlp(X_train, y_train, X_val=None, y_val=None, use_pos_weight: bool = False):
+    """Shared training wrapper used by all three pipeline variants."""
     pos_weight = _compute_pos_weights(y_train) if use_pos_weight else None
     validation_data = (X_val, y_val) if X_val is not None else None
 
@@ -260,7 +321,7 @@ def _cap_smote(X_train, y_train, prevalence_threshold=0.03, max_prevalence=0.15,
         # => n_syn = (max_prevalence * n_orig - n_pos_orig) / (1 - max_prevalence)
         n_syn_cap = int((max_prevalence * n_orig - n_pos_orig) / (1.0 - max_prevalence))
         if n_syn_cap <= 0:
-            continue  # already at or above the cap
+            continue # already at or above the cap
 
         smote = SMOTE(random_state=random_state)
         X_res, y_res = smote.fit_resample(X_train, y_train[col])
@@ -271,7 +332,7 @@ def _cap_smote(X_train, y_train, prevalence_threshold=0.03, max_prevalence=0.15,
 
         # Only keep up to n_syn_cap synthetic rows for this label
         n_keep = min(n_synthetic, n_syn_cap)
-        X_new = pd.DataFrame(X_res[n_orig: n_orig + n_keep], columns=X_train.columns)
+        X_new = pd.DataFrame(X_res[n_orig : n_orig + n_keep], columns=X_train.columns)
 
         # Synthetic rows: positive for this label, zero for all others
         y_new = pd.DataFrame(0, index=range(n_keep), columns=y_train.columns)
@@ -297,27 +358,33 @@ def _cap_smote(X_train, y_train, prevalence_threshold=0.03, max_prevalence=0.15,
 # =============================================================================
 
 def evaluate_and_visualize_mlp(
-    model,
+    model: MultilabelMLP,
     X_test,
-    y_test,
+    y_test: pd.DataFrame,
     y_features,
-    model_name,
-    out_path="../data/model_results/",
-    label_group_name="Diagnosis Labels",
-):
+    model_name: str,
+    out_path: str = "../data/model_results/",
+    label_group_name: str = "Diagnosis Labels",
+) -> pd.DataFrame:
     """
     Evaluate MLP and produce:
-      1. ROC + PR curves + aggregated confusion matrix  ({model_name}_evaluation_plots.png)
-      2. Label co-occurrence heatmap                    ({model_name}_label_confusion_matrix.png)
-      3. Per-label results CSV                          ({model_name}_results.csv)
+      1. ROC + PR curves + aggregated confusion matrix ({model_name}_evaluation_plots.png)
+      2. Label co-occurrence heatmap ({model_name}_label_confusion_matrix.png)
+      3. Per-label results CSV ({model_name}_results.csv)
     """
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    X_np   = np.asarray(X_test.values if hasattr(X_test, "values") else X_test, dtype=np.float32)
 
-    proba_matrix = predict_proba(model, X_np, device)
-    pred_matrix  = (proba_matrix >= 0.5).astype(int)
+    # Convert test features to tensor once
+    X_tensor = _as_float_tensor(X_test) # CPU tensor; predict_proba batches to device
+
+    proba_tensor = predict_proba(model, X_tensor, device) # (n, num_labels) CPU tensor
+    pred_tensor = (proba_tensor >= 0.5).to(torch.int64) # (n, num_labels) CPU tensor
+
+    # Keep as numpy only where sklearn metrics require it
+    proba_matrix = proba_tensor.numpy()
+    pred_matrix = pred_tensor.numpy()
 
     results = []
     for i, target in enumerate(y_features):
@@ -411,7 +478,7 @@ def evaluate_and_visualize_mlp(
 
     fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
-    plot_path = Path(out_path) / f"{model_name}_evaluation_plots.png"
+    plot_path = Path(out_path) / model_name / f"{model_name}_evaluation_plots.png"
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Plots saved to '{plot_path}'")
@@ -419,17 +486,15 @@ def evaluate_and_visualize_mlp(
     # --- Figure 2: Label co-occurrence matrix ---
     n_labels = len(valid_labels)
     label_cm = np.zeros((n_labels, n_labels))
-    y_pred_all_labels = np.zeros((len(X_np), n_labels))
 
-    for idx, label in enumerate(valid_labels):
-        label_idx = list(y_features).index(label)
-        y_pred_all_labels[:, idx] = pred_matrix[:, label_idx]
+    # Build prediction matrix for valid labels as a tensor slice
+    valid_indices = [list(y_features).index(l) for l in valid_labels]
+    pred_valid_tensor = pred_tensor[:, valid_indices] # (n, n_valid_labels) tensor
 
     for i, true_label in enumerate(valid_labels):
-        positive_mask = y_test[true_label].values == 1
+        positive_mask = torch.from_numpy(y_test[true_label].values == 1) # bool tensor
         if positive_mask.sum() > 0:
-            for j in range(n_labels):
-                label_cm[i, j] = y_pred_all_labels[positive_mask, j].sum()
+            label_cm[i] = pred_valid_tensor[positive_mask].float().sum(dim=0).numpy()
 
     fig, ax = plt.subplots(figsize=(max(12, n_labels * 0.6), max(10, n_labels * 0.5)))
     im = ax.imshow(label_cm, cmap="Greens", aspect="auto")
@@ -444,12 +509,14 @@ def evaluate_and_visualize_mlp(
     cbar.set_label("Prediction Count", rotation=270, labelpad=20, fontsize=11)
 
     if n_labels <= 30:
+        max_val = label_cm.max()
         for i in range(n_labels):
             for j in range(n_labels):
                 count = int(label_cm[i, j])
                 if count > 0:
-                    text_color = "white" if label_cm[i, j] > label_cm.max() / 2 else "black"
-                    ax.text(j, i, f"{count}", ha="center", va="center", color=text_color, fontsize=7)
+                    text_color = "white" if label_cm[i, j] > max_val / 2 else "black"
+                    ax.text(j, i, f"{count}", ha="center", va="center",
+                            color=text_color, fontsize=7)
 
     ax.set_title(
         f"Label Co-occurrence Matrix — {label_group_name}\n"
@@ -461,7 +528,7 @@ def evaluate_and_visualize_mlp(
     fig.suptitle(model_name, fontsize=16, fontweight="bold", y=1.02)
     plt.tight_layout()
 
-    label_cm_path = Path(out_path) / f"{model_name}_label_confusion_matrix.png"
+    label_cm_path = Path(out_path) / model_name / f"{model_name}_label_confusion_matrix.png"
     plt.savefig(label_cm_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Label co-occurrence matrix saved to '{label_cm_path}'")
@@ -477,11 +544,176 @@ def evaluate_and_visualize_mlp(
     print(f"  Recall:    {recall:.3f}")
     print(f"  F1-Score:  {f1:.3f}")
 
-    csv_path = Path(out_path) / f"{model_name}_results.csv"
+    csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
 
     return results_df
+
+
+# =============================================================================
+# K-Fold loss curve plotting
+# =============================================================================
+
+def plot_kfold_loss_curves(
+    X,
+    y: pd.DataFrame,
+    out_path: str,
+    model_name: str = "mlp",
+    n_splits: int = 3,
+    epochs: int = 100,
+    early_stopping_patience: int = 10,
+    dropout: float = 0.3,
+    lr: float = 1e-3,
+    batch_size: int = 64,
+    device: torch.device = None,
+) -> dict:
+    """
+    Train a MultilabelMLP using k-fold CV with early stopping and save a
+    single loss curve PNG.
+
+    Each fold trains up to `epochs` but stops early if val loss does not
+    improve for `early_stopping_patience` consecutive epochs. Loss arrays are
+    padded with the last recorded value after stopping so all folds stay the
+    same length for averaging.
+
+    Two lines on one plot: mean train loss and mean val loss across folds.
+    A dashed vertical line marks the mean early-stop epoch across folds.
+
+    Returns a dict with 'mean_train_loss', 'mean_val_loss', and 'mean_stopped_epoch'.
+    """
+    Path(out_path).mkdir(parents=True, exist_ok=True)
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    X_t = _as_float_tensor(X)
+    y_t = _as_float_tensor(y)
+    y_arr = y_t.numpy()
+
+    n_features = X_t.size(1)
+    num_labels = y_t.size(1)
+    strat_col = y_arr[:, 0] # stratify on first label
+
+    kf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+    train_loss_folds = np.zeros((n_splits, epochs))
+    val_loss_folds = np.zeros((n_splits, epochs))
+    stopped_epochs = []
+
+    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_t.numpy(), strat_col)):
+        print(f"  Fold {fold_idx + 1}/{n_splits}...")
+
+        X_tr, X_val = X_t[train_idx], X_t[val_idx]
+        y_tr, y_val = y_t[train_idx], y_t[val_idx]
+
+        pw = _compute_pos_weights(
+            pd.DataFrame(y_tr.numpy(), columns=y.columns)
+        ).to(device)
+
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
+        fold_model = MultilabelMLP(n_features, num_labels, dropout).to(device)
+        optimizer = torch.optim.AdamW(fold_model.parameters(), lr=lr, weight_decay=1e-4)
+        train_loader = _make_tensor_loader(X_tr, y_tr, batch_size, shuffle=True)
+        val_loader = _make_tensor_loader(X_val, y_val, batch_size, shuffle=False)
+
+        best_val_loss = float("inf")
+        patience_counter = 0
+        stopped_at = epochs # default: ran all epochs
+
+        for epoch in range(epochs):
+            # --- train ---
+            fold_model.train()
+            t_loss, t_n = 0.0, 0
+            for X_b, y_b in train_loader:
+                X_b, y_b = X_b.to(device), y_b.to(device)
+                optimizer.zero_grad()
+                loss = criterion(fold_model(X_b), y_b)
+                loss.backward()
+                optimizer.step()
+                t_loss += loss.item() * X_b.size(0)
+                t_n += X_b.size(0)
+            train_loss_folds[fold_idx, epoch] = t_loss / t_n if t_n else 0.0
+
+            # --- val ---
+            fold_model.eval()
+            v_loss, v_n = 0.0, 0
+            with torch.no_grad():
+                for X_b, y_b in val_loader:
+                    X_b, y_b = X_b.to(device), y_b.to(device)
+                    loss = criterion(fold_model(X_b), y_b)
+                    v_loss += loss.item() * X_b.size(0)
+                    v_n += X_b.size(0)
+            val_loss_folds[fold_idx, epoch] = v_loss / v_n if v_n else 0.0
+
+            # --- early stopping ---
+            if val_loss_folds[fold_idx, epoch] < best_val_loss:
+                best_val_loss = val_loss_folds[fold_idx, epoch]
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= early_stopping_patience:
+                stopped_at = epoch + 1 # 1-indexed
+                # Pad remaining epochs with last recorded values so array is full length
+                train_loss_folds[fold_idx, epoch + 1:] = train_loss_folds[fold_idx, epoch]
+                val_loss_folds[fold_idx, epoch + 1:] = val_loss_folds[fold_idx, epoch]
+                print(f"    Early stop at epoch {stopped_at}")
+                break
+
+        stopped_epochs.append(stopped_at)
+
+    mean_train = train_loss_folds.mean(axis=0)
+    mean_val = val_loss_folds.mean(axis=0)
+    best_epoch = int(np.argmin(mean_val))
+    mean_stopped = int(np.mean(stopped_epochs))
+
+    # --- Plot ---
+    epochs_range = np.arange(1, epochs + 1)
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Faint individual fold lines
+    for fold_idx in range(n_splits):
+        ax.plot(epochs_range, train_loss_folds[fold_idx], color="#2E5090", alpha=0.12, linewidth=0.8)
+        ax.plot(epochs_range, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.12, linewidth=0.8)
+
+    # Mean lines
+    ax.plot(epochs_range, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
+    ax.plot(epochs_range, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+
+    # Best val epoch
+    ax.axvline(
+        best_epoch + 1, color="gray", linestyle="--", linewidth=1.5,
+        label=f"Best epoch: {best_epoch + 1}  (val={mean_val[best_epoch]:.4f})",
+    )
+
+    # Mean early-stop epoch (only annotate if any fold stopped early)
+    if mean_stopped < epochs:
+        ax.axvline(
+            mean_stopped, color="#F57C00", linestyle=":", linewidth=1.5,
+            label=f"Mean early stop: epoch {mean_stopped}",
+        )
+
+    ax.set_xlabel("Epoch", fontsize=12)
+    ax.set_ylabel("BCE Loss", fontsize=12)
+    ax.set_title(
+        f"{model_name} — Train vs Val Loss\n"
+        f"{n_splits}-Fold CV · patience={early_stopping_patience}",
+        fontsize=14, fontweight="bold",
+    )
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_curves.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"\nK-fold loss curves saved to '{plot_path}'")
+
+    return {
+        "mean_train_loss": mean_train,
+        "mean_val_loss": mean_val,
+        "best_epoch": best_epoch,
+        "mean_stopped_epoch": mean_stopped,
+    }
 
 
 # =============================================================================
@@ -496,7 +728,7 @@ def _load_and_prepare(in_dir, config_path, pbar, steps):
     pbar.update(1)
 
     pbar.set_description(steps[1])
-    ed_encounters  = filter_ed_encounters(clinical_encounters)
+    ed_encounters = filter_ed_encounters(clinical_encounters)
     ed_ecg_records = filter_ed_ecg_records(ecg_records)
     pbar.update(1)
 
@@ -558,6 +790,7 @@ def run_mlp_base_pipeline(in_dir, config_path, out_path):
         "Preparing features",
         "Train/test split & scaling",
         "Training MLP (base)",
+        "K-fold loss curves",
         "Evaluating model",
     ]
 
@@ -578,11 +811,15 @@ def run_mlp_base_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[8])
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path, model_name="mlp_baseline")
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
         pbar.update(1)
         pbar.close()
 
         results_df = evaluate_and_visualize_mlp(
-            model, X_test, y_test, y_features, "mlp_base",
+            model, X_test, y_test, y_features, "mlp_baseline",
             out_path=out_path, label_group_name="Diagnosis Labels",
         )
 
@@ -622,6 +859,7 @@ def run_mlp_smote_pipeline(in_dir, config_path, out_path):
         "Train/test split & scaling",
         "Applying capped SMOTE",
         "Training MLP (SMOTE)",
+        "K-fold loss curves",
         "Evaluating model",
     ]
 
@@ -657,6 +895,10 @@ def run_mlp_smote_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[9])
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path, model_name="mlp_smote")
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
         pbar.update(1)
         pbar.close()
 
@@ -695,6 +937,7 @@ def run_mlp_weighted_pipeline(in_dir, config_path, out_path):
         "Preparing features",
         "Train/test split & scaling",
         "Training MLP (weighted loss)",
+        "K-fold loss curves",
         "Evaluating model",
     ]
 
@@ -716,6 +959,10 @@ def run_mlp_weighted_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[8])
+        plot_kfold_loss_curves(X_train, y_train, out_path=out_path, model_name="mlp_weighted")
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
         pbar.update(1)
         pbar.close()
 
@@ -730,4 +977,225 @@ def run_mlp_weighted_pipeline(in_dir, config_path, out_path):
 
     print()
     print("✓ MLP weighted model complete!")
+    return results_df
+
+# =============================================================================
+# ECG-FM embedding helpers
+# =============================================================================
+
+# ECG-FM config is always loaded from ecg_fm_params.json (sibling of this file)
+from pathlib import Path as _Path
+ECG_FM_CONFIG = _Path(__file__).parent.parent.parent / "configs" / "ecg_fm_params.json"
+
+def _attach_ecg_embeddings(earliest_ecgs, xgboost_config):
+    """
+    Build ecg_path column and call run_pooled_ecg_extraction to attach
+    1536-dim embeddings (emb_0 … emb_1535) to earliest_ecgs.
+
+    ECG-FM settings always come from ecg_fm_params.json.
+    xgboost_config is only used for base_records_dir path resolution.
+    """
+    import os
+    base_path = xgboost_config["paths"]["base_records_dir"]
+    paths = []
+    for p in earliest_ecgs["path"]:
+        p = os.path.splitext(p)[0]
+        if p.startswith("files/"):
+            p = p[len("files/"):]
+        paths.append(os.path.join(base_path, p))
+
+    subject_df = earliest_ecgs.copy().reset_index(drop=True)
+    subject_df["ecg_path"] = paths
+    return run_pooled_ecg_extraction(str(ECG_FM_CONFIG), subject_df)
+
+
+def _prepare_embedding_features(model_df):
+    """
+    Extend the base feature set with ECG-FM embedding columns (emb_0 … emb_1535).
+
+    Embedding columns are appended to X and added to cols_to_scale so they
+    are normalized alongside ECG intervals and vitals.
+    """
+    X, y, y_features, cols_to_scale = prepare_model_features(model_df)
+    embedding_cols = [col for col in model_df.columns if col.startswith("emb_")]
+    emb_df = model_df[embedding_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+    X = pd.concat([X.reset_index(drop=True), emb_df.reset_index(drop=True)], axis=1)
+    cols_to_scale = cols_to_scale + [c for c in embedding_cols if c in X.columns]
+    return X, y, y_features, cols_to_scale
+
+
+def _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps):
+    """
+    Steps 0-7: load data, filter, extract ECG-FM embeddings, aggregate vitals,
+    prepare features with embeddings, split, scale.
+    """
+    pbar.set_description(steps[0])
+    config = load_config(config_path)
+    ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[1])
+    ed_encounters = filter_ed_encounters(clinical_encounters)
+    ed_ecg_records = filter_ed_ecg_records(ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[2])
+    earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[3])
+    earliest_ecgs = _attach_ecg_embeddings(earliest_ecgs, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[4])
+    ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(
+        ed_vitals, earliest_ecgs, agg_window_hours=4.0
+    )
+    pbar.update(1)
+
+    pbar.set_description(steps[5])
+    model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
+    pbar.update(1)
+
+    pbar.set_description(steps[6])
+    X, y, y_features, cols_to_scale = _prepare_embedding_features(model_df)
+    pbar.update(1)
+
+    pbar.set_description(steps[7])
+    X_train, X_test, y_train, y_test = create_train_test_set(model_df, X, y)
+    X_train, X_test, _ = scale_features(X_train, X_test, cols_to_scale)
+    pbar.update(1)
+
+    return model_df, X_train, X_test, y_train, y_test, y_features
+
+
+# =============================================================================
+# Variant 4: Embedding + Base (normalized, uniform loss)
+# =============================================================================
+
+def run_mlp_embedding_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + ECG-FM embeddings (1536-dim): StandardScaler normalization,
+    uniform BCEWithLogitsLoss. No SMOTE, no pos_weight.
+
+    ECG-FM config is always read from ecg_fm_params.json via
+    run_pooled_ecg_extraction. The MLP input dimension automatically
+    expands to accommodate tabular features + 1536 embedding dims.
+    """
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Extracting ECG-FM embeddings (1536-dim)",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features (tabular + embeddings)",
+        "Train/test split & scaling",
+        "Training MLP embedding (base)",
+        "K-fold loss curves",
+        "Evaluating model",
+    ]
+
+    print("Running MLP Embedding Base model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = \
+            _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps)
+
+        pbar.set_description(steps[8])
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=False)
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
+        plot_kfold_loss_curves(
+            X_train, y_train, out_path=out_path, model_name="mlp_embedding"
+        )
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_embedding",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP embedding base model complete!")
+    return results_df
+
+
+# =============================================================================
+# Variant 6: Embedding + Weighted loss
+# =============================================================================
+
+def run_mlp_embedding_weighted_pipeline(in_dir, config_path, out_path):
+    """
+    MLP + ECG-FM embeddings (1536-dim) + per-label BCEWithLogitsLoss pos_weight.
+
+    ECG-FM config is always read from ecg_fm_params.json.
+    Computes pos_weight = n_negative / n_positive per label. No synthetic data.
+    """
+    steps = [
+        "Loading configuration & data",
+        "Filtering ED encounters & ECG records",
+        "Getting earliest ECGs per stay",
+        "Extracting ECG-FM embeddings (1536-dim)",
+        "Aggregating vitals to ECG time",
+        "Creating model dataframe",
+        "Preparing features (tabular + embeddings)",
+        "Train/test split & scaling",
+        "Training MLP embedding (weighted loss)",
+        "K-fold loss curves",
+        "Evaluating model",
+    ]
+
+    print("Running MLP Embedding Weighted model...")
+    print()
+    pbar = tqdm(
+        total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
+    )
+
+    try:
+        model_df, X_train, X_test, y_train, y_test, y_features = \
+            _load_and_prepare_with_embeddings(in_dir, config_path, pbar, steps)
+
+        pbar.set_description(steps[8])
+        X_tr, y_tr, X_val, y_val = _val_split(model_df, X_train, y_train)
+        model = _train_mlp(X_tr, y_tr, X_val=X_val, y_val=y_val, use_pos_weight=True)
+        pbar.update(1)
+
+        pbar.set_description(steps[9])
+        plot_kfold_loss_curves(
+            X_train, y_train, out_path=out_path, model_name="mlp_embedding_weighted"
+        )
+        pbar.update(1)
+
+        pbar.set_description(steps[10])
+        pbar.update(1)
+        pbar.close()
+
+        results_df = evaluate_and_visualize_mlp(
+            model, X_test, y_test, y_features, "mlp_embedding_weighted",
+            out_path=out_path, label_group_name="Diagnosis Labels",
+        )
+
+    except Exception as e:
+        pbar.close()
+        raise e
+
+    print()
+    print("✓ MLP embedding weighted model complete!")
     return results_df
