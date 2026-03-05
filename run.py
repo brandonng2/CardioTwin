@@ -13,9 +13,7 @@ from src.models.xgboost import (
     run_xgboost_smote_pipeline,
 )
 from src.models.xgboost_embedding import run_xgboost_embedding_pipeline
-from src.models.mlp import run_mlp_baseline_pipeline
 from src.models.lstm_baseline import run_lstm_baseline_pipeline
-from src.models.xgboost_baseline import run_xgboost_baseline_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
@@ -155,29 +153,6 @@ def run_mlp_baseline(args):
 
     run_mlp_base_pipeline(in_dir, config_path, out_path)
 
-def run_lstm_baseline(args):
-    print("\n" + "=" * 60)
-    print("LSTM BASELINE MODEL")
-    print("=" * 60)
-
-    # Default LSTM config path
-    config_path = "configs/lstm_params.json"
-
-    config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    # Pass target_type from config (optional, defaults to 'labels')
-    target_type = config.get("target_type", "labels")
-
-    # Pass entire config to pipeline in case model/training params needed later
-    run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
-
-# def run_mlp_baseline(args):
-#     """Run MLP baseline model."""
-#     print("\n" + "=" * 60)
-#     print("MLP BASELINE MODEL")
-#     print("=" * 60)
 def run_mlp_weighted(args):
     """Run MLP weighted model."""
     print("\n" + "=" * 60)
@@ -216,6 +191,20 @@ def run_mlp_embedding(args):
     out_path = Path(config["paths"]["out_dir"])
 
     run_mlp_embedding_pipeline(in_dir, config_path, out_path)
+
+def run_lstm_baseline(args):
+    print("\n" + "=" * 60)
+    print("LSTM BASELINE MODEL")
+    print("=" * 60)
+
+    config_path = "configs/lstm_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    # target_type = config.get("target_type", "labels")
+
+    # run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 
 def main():
@@ -286,6 +275,10 @@ def main():
         "--mlp-embedding", action="store_true", dest="mlp_embedding",
         help="Run MLP embedding model — Creating ECG embeddings instead of derived features",
     )
+    parser.add_argument(
+        "--lstm-baseline", action="store_true", dest="lstm_baseline",
+        help="Run LSTM baseline model",
+    )
 
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
@@ -298,6 +291,7 @@ def main():
     parser.add_argument("--skip-mlp-weighted", action="store_true", help="Skip MLP weighted model")
     parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
     parser.add_argument("--skip-mlp-embedding", action="store_true", help="Skip MLP embedding model")
+    parser.add_argument("--skip-lstm-baseline", action="store_true", help="Skip LSTM baseline model")
 
     args = parser.parse_args()
 
@@ -306,7 +300,7 @@ def main():
         args.static, args.ecg, args.vitals, args.entities,
         args.xgb_base, args.xgb_weighted, args.xgb_smote, args.xgb_embedding, 
         args.mlp_baseline, args.mlp_weighted, args.mlp_smote, args.mlp_embedding,
-        args.static, args.ecg, args.vitals, args.entities, args.xgb_target, args.lstmbaseline
+        args.lstm_baseline
     ])
 
     print("=" * 60)
@@ -361,6 +355,10 @@ def main():
     # MLP EMBEDDING Model
     if (run_all and not args.skip_mlp_embedding) or args.mlp_embedding:
         run_mlp_embedding(args)
+
+    # LSTM Baseline Model
+    if (run_all and not args.skip_lstm_baseline) or args.lstm_baseline:
+        run_lstm_baseline(args)
         
 
 if __name__ == "__main__":
