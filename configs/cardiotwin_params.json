@@ -2,14 +2,14 @@
   "paths": {
     "in_dir": "data/processed",
     "out_dir": "data/model_results/cardiotwin",
-    "base_records_dir": "data/processed"
+    "base_records_dir": "/home/b5ng/teams/b03/ecg/files"
   },
   "sources": {
     "clinical_encounters": "clinical_encounters_extracted.csv",
     "vitals": "ed_vitals.csv",
     "ecg_records": "ecg_data.csv"
   },
-  "ecg_fm_config": "configs/ecg_fm_params.json",
+  "ecg_fm_config": "src/models/ecgfm_pretrained.pt",
   "pipeline": {
     "max_t": 12,
     "max_n": 2,
