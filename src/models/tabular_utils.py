@@ -165,9 +165,24 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
     merge_keys = ["subject_id", "ed_stay_id", "hadm_id", "icu_stay_id"]
     for key in merge_keys:
         ecg_aggregate_vitals[key] = pd.to_numeric(ecg_aggregate_vitals[key], errors="coerce").astype("Int64")
-        ed_encounters[key]         = pd.to_numeric(ed_encounters[key], errors="coerce").astype("Int64")
+        ed_encounters[key] = pd.to_numeric(ed_encounters[key], errors="coerce").astype("Int64")
 
-    return ecg_aggregate_vitals.merge(ed_encounters, on=merge_keys, how="inner")
+    model_df = ecg_aggregate_vitals.merge(ed_encounters, on=merge_keys, how="inner")
+
+    # Build binary label columns from pre-computed diagnosis_labels
+    def parse_labels(val):
+        if pd.isna(val) or val == "[]":
+            return []
+        try:
+            return ast.literal_eval(val) if isinstance(val, str) else list(val)
+        except Exception:
+            return []
+
+    parsed = model_df["diagnosis_labels"].apply(parse_labels)
+    for col in cardiovascular_labels.keys():
+        model_df[col] = parsed.apply(lambda lbls: 1.0 if col in lbls else 0.0).astype(np.float32)
+
+    return model_df
 
 
 def onehot_labels(df, label_column="labels", prefix="label_"):
