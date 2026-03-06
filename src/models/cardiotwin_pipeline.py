@@ -288,7 +288,11 @@ def prepare_ehr_features(model_df: pd.DataFrame, subject_stay_ids: list,
     df = df.set_index(["subject_id", "ed_stay_id"])
 
     exclude_prefixes = ("label_", "report_", "emb_", "path", "ecg_time", "charttime")
-    exclude_exact = {"stay_id", "subject_id", "ed_stay_id", "hadm_id", "study_id", "split"}
+    exclude_exact = {
+        "stay_id", "subject_id", "ed_stay_id", "hadm_id", "study_id", "split",
+        "is_cardiovascular", "file_name", "cart_id",  # label-derived flag + ECG identifiers
+        *LABEL_COLS,  # prevent label leakage into EHR features
+    }
 
     candidate_cols = [
         c for c in df.columns
