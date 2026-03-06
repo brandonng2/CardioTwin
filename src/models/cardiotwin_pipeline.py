@@ -159,6 +159,19 @@ def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_
         embs = group[emb_cols].values.astype(np.float32)
         ecg_dict[(int(sid), stay_id)] = embs[:max_n]
 
+    n_stays_with_ecg = len(ecg_dict)
+    ecg_counts = [v.shape[0] for v in ecg_dict.values()]
+    print(f"\n[ECG] ecg_dict: {n_stays_with_ecg} stays | "
+          f"ECGs per stay — min:{min(ecg_counts)} max:{max(ecg_counts)} "
+          f"mean:{np.mean(ecg_counts):.1f} | emb_dim={ecg_fm_dim}")
+
+    # Bug 5: NaN ECG embeddings silently corrupt attention pooling
+    nan_ecgs = [(k, v) for k, v in ecg_dict.items() if np.isnan(v).any()]
+    if nan_ecgs:
+        print(f"  WARNING: {len(nan_ecgs)} stays have NaN ECG embeddings — zeroing out")
+        for k, v in nan_ecgs:
+            ecg_dict[k] = np.nan_to_num(v, nan=0.0)
+
     return ecg_dict
 
 
@@ -212,6 +225,11 @@ def create_vital_features(ed_vitals_df: pd.DataFrame, scaler=None, fit_scaler: b
     elif scaler is not None:
         vital_feat_df[feat_cols] = scaler.transform(vital_feat_df[feat_cols])
 
+    print(f"\n[Vitals] create_vital_features: {len(vital_feat_df)} stays | "
+          f"{len(feat_cols)} stat features | "
+          f"vitals present: {present_vitals} | "
+          f"fit_scaler={fit_scaler}")
+
     return vital_feat_df, scaler
 
 
@@ -244,6 +262,11 @@ def create_vital_sequences(ed_vitals_df: pd.DataFrame, vital_scaler=None, fit_sc
     sequences = {}
     for (sid, stay_id), group in df.groupby(["subject_id", stay_col]):
         sequences[(int(sid), stay_id)] = group[present_vitals].values.astype(np.float32)[:MAX_T]
+
+    seq_lens = [v.shape[0] for v in sequences.values()]
+    print(f"\n[Vitals] create_vital_sequences: {len(sequences)} stays | "
+          f"seq len — min:{min(seq_lens)} max:{max(seq_lens)} mean:{np.mean(seq_lens):.1f} | "
+          f"vitals: {present_vitals} | fit_scaler={fit_scaler}")
 
     return sequences, vital_scaler
 
@@ -302,6 +325,13 @@ def prepare_ehr_features(model_df: pd.DataFrame, subject_stay_ids: list,
         cont_idx = [all_feat_cols.index(c) for c in continuous_cols]
         X[:, cont_idx] = scaler.transform(X[:, cont_idx])
 
+    nan_rows = np.isnan(X).any(axis=1).sum()
+    print(f"\n[EHR] prepare_ehr_features: shape={X.shape} | "
+          f"continuous={len(continuous_cols)} binary={len(binary_cols)} | "
+          f"rows with NaN after fillna={nan_rows} | fit_scaler={fit_scaler}")
+    if fit_scaler:
+        print(f"      feature names: {all_feat_cols[:8]}{'...' if len(all_feat_cols) > 8 else ''}")
+
     return X, scaler, all_feat_cols
 
 
@@ -329,8 +359,39 @@ class CardioEDDataset(Dataset):
         self.vital_sequences = vital_sequences or {}
         self.vital_dim = vital_dim
         self.ecg_fm_dim = ecg_fm_dim
+
+        # Bug 4: duplicate (subject_id, ed_stay_id) in vital_feat_df causes .loc to
+        # return a DataFrame instead of a Series, producing shape mismatches downstream
+        dups = vital_feat_df.duplicated(["subject_id", "ed_stay_id"]).sum()
+        if dups > 0:
+            raise ValueError(
+                f"vital_feat_df has {dups} duplicate (subject_id, ed_stay_id) rows. "
+                f"Deduplicate before constructing dataset."
+            )
+
         self.vital_feats = vital_feat_df.set_index(["subject_id", "ed_stay_id"])
         self.labels = labels_df.set_index(["subject_id", "ed_stay_id"])
+
+        # Bug 1: EHR matrix must be row-aligned to subject_stay_ids — misalignment
+        # is silent (no crash) but every patient gets the wrong EHR features
+        assert len(ehr_matrix) == len(subject_stay_ids), (
+            f"EHR matrix rows ({len(ehr_matrix)}) != subject_stay_ids ({len(subject_stay_ids)}). "
+            f"Ensure prepare_ehr_features() is called with the same ids list passed here."
+        )
+
+        label_cols_in_df = [c for c in LABEL_COLS if c in self.labels.columns]
+        ecg_coverage = sum(1 for sid, stay in subject_stay_ids if (int(sid), stay) in ecg_dict)
+        vital_coverage = sum(1 for sid, stay in subject_stay_ids if (int(sid), stay) in self.vital_feats.index)
+        print(f"\n[Dataset] CardioEDDataset: {len(subject_stay_ids)} stays | "
+              f"label cols={len(label_cols_in_df)}/17 | "
+              f"ECG coverage={ecg_coverage}/{len(subject_stay_ids)} | "
+              f"vital coverage={vital_coverage}/{len(subject_stay_ids)}")
+        if len(label_cols_in_df) > 0:
+            label_matrix = self.labels[label_cols_in_df].values
+            pos_rates = label_matrix.mean(axis=0)
+            print(f"      label prevalence (top 5 by rate): "
+                  + str({label_cols_in_df[i]: f"{pos_rates[i]:.3f}"
+                         for i in np.argsort(pos_rates)[::-1][:5]}))
 
     def __len__(self):
         return len(self.ids)
@@ -371,6 +432,9 @@ def collate_fn(batch, max_N=MAX_N, max_T=MAX_T, ecg_fm_dim=ECG_FM_DIM):
         ecg_mask.append([True] * n_clip + [False] * (max_N - n_clip))
 
     vital_lens = torch.tensor([b["vital_len"] for b in batch], dtype=torch.long)
+    # Bug 3: pack_padded_sequence crashes if any length is 0. Clamp to min=1 so
+    # zero-vital stays pass through the LSTM as a single zero-padded timestep.
+    vital_lens = torch.clamp(vital_lens, min=1)
     vital_seqs = [torch.tensor(b["vital_seq"], dtype=torch.float32) for b in batch]
     vital_padded = pad_sequence(vital_seqs, batch_first=True, padding_value=0.0)
 
@@ -862,12 +926,20 @@ def _train_cardiotwin_model(
                                 grad_clip_norm=params["grad_clip_norm"])
         val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
         scheduler.step()
-        if val_auc > best_val_auc:
+        improved = val_auc > best_val_auc
+        if improved:
             best_val_auc = val_auc
             torch.save(model.state_dict(), best_model_pt)
+        print(f"  Epoch {epoch+1:3d}/{params['epochs']} | "
+              f"train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
+              f"val_auc={val_auc:.4f}{' ✓' if improved else ''}")
 
     model.load_state_dict(torch.load(best_model_pt, map_location=device))
     _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
+    print(f"\n[Train] Best val_auc={best_val_auc:.4f} | test_auc={test_auc:.4f}")
+    valid_aucs = [(LABEL_COLS[i], auc) for i, auc in enumerate(per_label_aucs) if not np.isnan(auc)]
+    valid_aucs.sort(key=lambda x: x[1], reverse=True)
+    print(f"[Train] Per-label AUC (non-nan): {valid_aucs}")
     return model, test_auc, per_label_aucs
 
 
@@ -1154,6 +1226,21 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
             in_dir, config_path, pbar, steps
         )
 
+        print(f"\n{'='*60}")
+        print(f"[Pipeline] Data loaded")
+        print(f"  model_df:          {model_df.shape}")
+        print(f"  ed_vitals:         {ed_vitals.shape}")
+        print(f"  ecgs embedded:     {all_ecgs_embedded.shape}")
+        label_cols_check = [c for c in LABEL_COLS if c in model_df.columns]
+        print(f"  label cols in model_df: {len(label_cols_check)}/17 — "
+              + (f"{label_cols_check}" if len(label_cols_check) <= 5
+                 else f"{label_cols_check[:5]}..."))
+        if len(label_cols_check) == 0:
+            raise ValueError("CRITICAL: No label columns in model_df. Check create_model_df().")
+        pos_counts = model_df[label_cols_check].sum()
+        print(f"  positive label counts:\n{pos_counts.to_string()}")
+        print(f"{'='*60}")
+
         # Patient-level split
         splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
         train_idx, test_idx = next(splitter.split(model_df, groups=model_df["subject_id"].astype(int)))
@@ -1173,11 +1260,31 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         val_ids = get_ids(val_df)
         test_ids = get_ids(test_df)
 
+        print(f"\n[Pipeline] Patient-level split")
+        print(f"  train: {len(train_df)} stays ({train_df['subject_id'].nunique()} patients)")
+        print(f"  val:   {len(val_df)} stays ({val_df['subject_id'].nunique()} patients)")
+        print(f"  test:  {len(test_df)} stays ({test_df['subject_id'].nunique()} patients)")
+        # Check for patient leakage across splits
+        train_pats = set(train_df["subject_id"])
+        val_pats   = set(val_df["subject_id"])
+        test_pats  = set(test_df["subject_id"])
+        tv_overlap = train_pats & val_pats
+        tt_overlap = train_pats & test_pats
+        if tv_overlap or tt_overlap:
+            print(f"  WARNING: patient overlap — train/val:{len(tv_overlap)} train/test:{len(tt_overlap)}")
+        else:
+            print(f"  ✓ No patient leakage across splits")
+
         label_cols_present = [c for c in LABEL_COLS if c in model_df.columns]
         id_label_cols = ["subject_id", "ed_stay_id"] + label_cols_present
         train_labels = train_df[id_label_cols]
         val_labels = val_df[id_label_cols]
         test_labels = test_df[id_label_cols]
+
+        print(f"\n[Pipeline] Labels")
+        print(f"  label_cols_present: {len(label_cols_present)}/17")
+        if label_cols_present:
+            print(f"  train positives per label:\n{train_labels[label_cols_present].sum().to_string()}")
 
         pbar.set_description(steps[6])
         train_sids = set(train_df["subject_id"])
@@ -1202,15 +1309,40 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         actual_vital_stat = len([c for c in train_vital_feat.columns if c.startswith("vf_")])
         pbar.update(1)
 
+        # Filter IDs to those with vitals coverage
+        def filter_to_vitals(ids, vital_feat_df):
+            valid = set(zip(vital_feat_df["subject_id"].astype(int), vital_feat_df["ed_stay_id"]))
+            filtered = [(sid, stay) for sid, stay in ids if (sid, stay) in valid]
+            return filtered
+
+        before = len(train_ids), len(val_ids), len(test_ids)
+        train_ids = filter_to_vitals(train_ids, train_vital_feat)
+        val_ids   = filter_to_vitals(val_ids,   val_vital_feat)
+        test_ids  = filter_to_vitals(test_ids,  test_vital_feat)
+        after = len(train_ids), len(val_ids), len(test_ids)
+        print(f"\n[Pipeline] Vitals filter")
+        print(f"  vital_dim={actual_vital_dim} stat_features={actual_vital_stat}")
+        print(f"  train: {before[0]} -> {after[0]} stays retained")
+        print(f"  val:   {before[1]} -> {after[1]} stays retained")
+        print(f"  test:  {before[2]} -> {after[2]} stays retained")
+        dropped = sum(b - a for b, a in zip(before, after))
+        if dropped > 0:
+            print(f"  WARNING: {dropped} stays dropped (no vitals data)")
+
         pbar.set_description(steps[7])
         train_ehr, ehr_scaler, ehr_feat_names = prepare_ehr_features(model_df, train_ids, fit_scaler=True)
         val_ehr, _, _ = prepare_ehr_features(model_df, val_ids, scaler=ehr_scaler)
         test_ehr, _, _ = prepare_ehr_features(model_df, test_ids, scaler=ehr_scaler)
         ehr_dim = train_ehr.shape[1]
+        print(f"\n[Pipeline] EHR features: ehr_dim={ehr_dim}")
+        print(f"  train_ehr={train_ehr.shape} val_ehr={val_ehr.shape} test_ehr={test_ehr.shape}")
         pbar.update(1)
 
         pbar.set_description(steps[8])
         ecg_dict = prepare_ecg(all_ecgs_embedded, max_n=max_n, ecg_fm_dim=ecg_fm_dim)
+        train_ecg_cov = sum(1 for sid, stay in train_ids if (int(sid), stay) in ecg_dict)
+        print(f"\n[Pipeline] ECG coverage in train: {train_ecg_cov}/{len(train_ids)} "
+              f"({100*train_ecg_cov/max(len(train_ids),1):.1f}%)")
         collate = partial(collate_fn, max_N=max_n, max_T=max_t, ecg_fm_dim=ecg_fm_dim)
 
         def make_loader(ids, vf, ehr, labels, seqs, shuffle):
@@ -1239,6 +1371,15 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
             n_labels=len(label_cols_present),
         ).to(device)
         model.set_ehr_dim(ehr_dim, device=device)
+
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"\n[Pipeline] CardioTwinED built")
+        print(f"  device={device} | trainable_params={total_params:,}")
+        print(f"  vital_stat={actual_vital_stat} vital_dim={actual_vital_dim} "
+              f"ehr_dim={ehr_dim} ecg_emb_dim={ecg_fm_dim}")
+        print(f"  enc_dim={enc_dim} hidden_dim={hidden_dim} lstm_hidden={lstm_hidden} "
+              f"n_labels={len(label_cols_present)}")
+        print(f"\n[Pipeline] Starting training: epochs={epochs} batch={batch_size} lr={lr}")
 
         model, test_auc, per_label_aucs = _train_cardiotwin_model(
             model, train_loader, val_loader, test_loader, params, out_path, device
@@ -1282,10 +1423,17 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
             and len(test_seqs[(sid, stay_id)]) >= min_trajectory_steps
         ][:n_trajectory_samples]
 
+        # Bug 6: test_ids.index() is O(n) per call and returns wrong row if test_ids
+        # was filtered after test_ehr was built. Build O(1) lookup once instead.
+        test_id_to_row = {(sid, stay): i for i, (sid, stay) in enumerate(test_ids)}
+
         for sid, stay_id in candidates:
             raw_seq = test_seqs[(sid, stay_id)]
             ecg_embs = ecg_dict.get((int(sid), stay_id), np.zeros((1, ecg_fm_dim), dtype=np.float32))
-            row_idx = test_ids.index((sid, stay_id))
+            row_idx = test_id_to_row.get((sid, stay_id))
+            if row_idx is None:
+                print(f"  WARNING: ({sid}, {stay_id}) not found in test_id_to_row, skipping trajectory")
+                continue
             ehr_row = test_ehr[row_idx]
             traj = simulate_trajectory(
                 model, raw_seq, ecg_embs, ehr_row, device,
