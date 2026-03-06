@@ -112,13 +112,33 @@ LABEL_COLS = [
 # 1. STREAM 1 — ECG-FM EMBEDDINGS
 # =============================================================================
 
-def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict, ecg_fm_config_path: str) -> pd.DataFrame:
+def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
     Extract ECG-FM embeddings for ALL ECG records (every ECG per stay).
-    Builds ecg_path for each row and calls run_pooled_ecg_extraction().
-    Returns ed_ecg_records with emb_0...emb_1535 attached.
+    Builds the ecg_fm config dict directly from cardiotwin_params.json —
+    no separate ecg_fm_params.json needed. Writes a temp JSON because
+    run_pooled_ecg_extraction expects a file path.
+    Keys required: cfg["model"]["checkpoint_path"], cfg["model"]["embedding_dim"]
     """
+    import json, tempfile
+
     base_path = config["paths"]["base_records_dir"]
+    checkpoint_path = config["model"].get("checkpoint_path") or config.get("ecg_fm_config")
+    if checkpoint_path is None:
+        raise ValueError(
+            "cardiotwin_params.json must have config['model']['checkpoint_path'] "
+            "pointing to the ECG-FM .pt file."
+        )
+    if not os.path.isabs(checkpoint_path):
+        checkpoint_path = str(_REPO_ROOT / checkpoint_path)
+
+    ecg_fm_cfg = {
+        "model": {
+            "checkpoint_path": checkpoint_path,
+            "embedding_dim": config.get("model", {}).get("ecg_fm_dim", ECG_FM_DIM),
+        }
+    }
+
     paths = []
     for p in ed_ecg_records["path"]:
         p = os.path.splitext(str(p))[0]
@@ -128,7 +148,17 @@ def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict, ecg_f
 
     subject_df = ed_ecg_records.copy().reset_index(drop=True)
     subject_df["ecg_path"] = paths
-    return run_pooled_ecg_extraction(ecg_fm_config_path, subject_df)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
+        json.dump(ecg_fm_cfg, tmp)
+        tmp_path = tmp.name
+
+    try:
+        result = run_pooled_ecg_extraction(tmp_path, subject_df)
+    finally:
+        os.unlink(tmp_path)
+
+    return result
 
 
 def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_FM_DIM) -> dict:
@@ -827,9 +857,6 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         out_path = str(Path(out_path).resolve()) if out_path else str(_REPO_ROOT / config["paths"].get("out_dir", "data/model_results/cardiotwin"))
         Path(out_path).mkdir(parents=True, exist_ok=True)
 
-        ecg_fm_config_key = config.get("ecg_fm_config", "configs/ecg_fm_params.json")
-        ecg_fm_config_path = str(_REPO_ROOT / ecg_fm_config_key) if not os.path.isabs(ecg_fm_config_key) else ecg_fm_config_key
-
         pl = config.get("pipeline", {})
         max_t = pl.get("max_t", MAX_T)
         max_n = pl.get("max_n", MAX_N)
@@ -879,7 +906,7 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         pbar.set_description(steps[3])
-        all_ecgs_embedded = _attach_ecg_embeddings_all(ed_ecg_records, config, ecg_fm_config_path)
+        all_ecgs_embedded = _attach_ecg_embeddings_all(ed_ecg_records, config)
         pbar.update(1)
 
         pbar.set_description(steps[4])
@@ -1047,12 +1074,3 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     print()
     print("✓ CardioTwin pipeline complete!")
     return None
-
-
-if __name__ == "__main__":
-    repo = _REPO_ROOT
-    cfg = load_config(str(repo / "configs" / "cardiotwin_params.json"))
-    in_dir = sys.argv[1] if len(sys.argv) > 1 else str(repo / cfg["paths"]["in_dir"])
-    config_path = sys.argv[2] if len(sys.argv) > 2 else str(repo / "configs" / "cardiotwin_params.json")
-    out_path = sys.argv[3] if len(sys.argv) > 3 else str(repo / cfg["paths"].get("out_dir", "data/model_results/cardiotwin"))
-    run_cardiotwin_pipeline(in_dir, config_path, out_path)

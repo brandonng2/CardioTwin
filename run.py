@@ -1,25 +1,23 @@
 import json
 import argparse
 from pathlib import Path
-from src.models.mlp import (
-    run_mlp_base_pipeline, 
-    run_mlp_smote_pipeline,
-    run_mlp_weighted_pipeline,
-    run_mlp_embedding_pipeline
-)
+from src.preprocessing.static_preprocessing import run_static_preprocessing
+from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
+from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
+from src.preprocessing.icd_entity_extraction import run_entity_extraction
 from src.models.xgboost import (
     run_xgboost_base_pipeline,
     run_xgboost_weighted_pipeline,
     run_xgboost_smote_pipeline,
 )
 from src.models.xgboost_embedding import run_xgboost_embedding_pipeline
-from src.models.lstm_baseline import run_lstm_baseline_pipeline
+from src.models.mlp import (
+    run_mlp_base_pipeline, 
+    run_mlp_smote_pipeline,
+    run_mlp_weighted_pipeline,
+    run_mlp_embedding_pipeline
+)
 from src.models.cardiotwin_pipeline import run_cardiotwin_pipeline
-from src.preprocessing.static_preprocessing import run_static_preprocessing
-from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
-from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
-from src.preprocessing.icd_entity_extraction import run_entity_extraction
-
 
 def load_config(config_path):
     """Load a JSON configuration file."""
@@ -192,20 +190,6 @@ def run_mlp_embedding(args):
     out_path = Path(config["paths"]["out_dir"])
 
     run_mlp_embedding_pipeline(in_dir, config_path, out_path)
-
-def run_lstm_baseline(args):
-    print("\n" + "=" * 60)
-    print("LSTM BASELINE MODEL")
-    print("=" * 60)
-
-    config_path = "configs/lstm_params.json"
-    config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    # target_type = config.get("target_type", "labels")
-
-    # run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 
 def run_cardiotwin(args):
@@ -387,7 +371,6 @@ def main():
     # CardioTwin full pipeline
     if (run_all and not args.skip_cardiotwin) or args.cardiotwin:
         run_cardiotwin(args)
-
 
 if __name__ == "__main__":
     main()
