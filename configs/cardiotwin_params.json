@@ -1,0 +1,39 @@
+{
+  "paths": {
+    "in_dir": "data/processed",
+    "out_dir": "data/model_results/cardiotwin",
+    "base_records_dir": "data/processed"
+  },
+  "sources": {
+    "clinical_encounters": "clinical_encounters_extracted.csv",
+    "vitals": "ed_vitals.csv",
+    "ecg_records": "ecg_data.csv"
+  },
+  "ecg_fm_config": "configs/ecg_fm_params.json",
+  "pipeline": {
+    "max_t": 12,
+    "max_n": 2,
+    "agg_window_hours": 4.0,
+    "test_size": 0.2,
+    "val_size": 0.1,
+    "random_state": 42,
+    "val_random_state": 0,
+    "num_workers": 4,
+    "n_trajectory_samples": 5,
+    "min_trajectory_steps": 3
+  },
+  "model": {
+    "enc_dim": 128,
+    "hidden_dim": 256,
+    "lstm_hidden": 64,
+    "dropout": 0.3,
+    "ecg_fm_dim": 1536
+  },
+  "training": {
+    "batch_size": 256,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "epochs": 50,
+    "grad_clip_norm": 1.0
+  }
+}

@@ -14,6 +14,7 @@ from src.models.xgboost import (
 )
 from src.models.xgboost_embedding import run_xgboost_embedding_pipeline
 from src.models.lstm_baseline import run_lstm_baseline_pipeline
+from src.models.cardiotwin_pipeline import run_cardiotwin_pipeline
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
@@ -207,6 +208,21 @@ def run_lstm_baseline(args):
     # run_lstm_baseline_pipeline(in_dir, config_path, out_path, target_type=target_type)
 
 
+def run_cardiotwin(args):
+    """Run CardioTwin full multimodal pipeline (ECG-FM + vitals + EHR, gated fusion)."""
+    print("\n" + "=" * 60)
+    print("CARDIOTWIN PIPELINE")
+    print("=" * 60)
+
+    config_path = "configs/cardiotwin_params.json"
+    config = load_config(config_path)
+    in_dir = Path(config["paths"]["in_dir"])
+    out_path = Path(config["paths"]["out_dir"])
+
+    run_cardiotwin_pipeline(in_dir, config_path, out_path)
+    print("✓ CardioTwin pipeline completed")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring",
@@ -234,6 +250,9 @@ def main():
             python run.py --mlp-weighted
             python run.py --mlp-smote
             python run.py --mlp-embedding
+
+            # CardioTwin full pipeline
+            python run.py --cardiotwin
         """,
     )
 
@@ -279,6 +298,10 @@ def main():
         "--lstm-baseline", action="store_true", dest="lstm_baseline",
         help="Run LSTM baseline model",
     )
+    parser.add_argument(
+        "--cardiotwin", action="store_true", dest="cardiotwin",
+        help="Run CardioTwin full multimodal pipeline (ECG-FM + vitals + EHR)",
+    )
 
     # Skip flags (for use with --all)
     parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
@@ -292,15 +315,16 @@ def main():
     parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
     parser.add_argument("--skip-mlp-embedding", action="store_true", help="Skip MLP embedding model")
     parser.add_argument("--skip-lstm-baseline", action="store_true", help="Skip LSTM baseline model")
+    parser.add_argument("--skip-cardiotwin", action="store_true", help="Skip CardioTwin pipeline")
 
     args = parser.parse_args()
 
     # Determine what to run
     run_all = args.all or not any([
         args.static, args.ecg, args.vitals, args.entities,
-        args.xgb_base, args.xgb_weighted, args.xgb_smote, args.xgb_embedding, 
+        args.xgb_base, args.xgb_weighted, args.xgb_smote, args.xgb_embedding,
         args.mlp_baseline, args.mlp_weighted, args.mlp_smote, args.mlp_embedding,
-        args.lstm_baseline
+        args.lstm_baseline, args.cardiotwin
     ])
 
     print("=" * 60)
@@ -359,7 +383,11 @@ def main():
     # LSTM Baseline Model
     if (run_all and not args.skip_lstm_baseline) or args.lstm_baseline:
         run_lstm_baseline(args)
-        
+
+    # CardioTwin full pipeline
+    if (run_all and not args.skip_cardiotwin) or args.cardiotwin:
+        run_cardiotwin(args)
+
 
 if __name__ == "__main__":
     main()
