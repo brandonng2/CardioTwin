@@ -1072,7 +1072,7 @@ def evaluate_and_visualize_cardiotwin(
     results = []
     for i, label in enumerate(label_cols_present):
         n_pos = y_true[:, i].sum()
-        if y_true[:, i].nunique() > 1:
+        if len(np.unique(y_true[:, i])) > 1:
             auc = roc_auc_score(y_true[:, i], y_pred[:, i])
             ap = average_precision_score(y_true[:, i], y_pred[:, i])
         else:
@@ -1086,7 +1086,7 @@ def evaluate_and_visualize_cardiotwin(
         })
 
     results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
-    valid_labels = [l for l in label_cols_present if y_true[:, label_cols_present.index(l)].nunique() > 1]
+    valid_labels = [l for l in label_cols_present if len(np.unique(y_true[:, label_cols_present.index(l)])) > 1]
 
     # ROC + PR + Confusion Matrix
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
@@ -1336,6 +1336,9 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         ehr_dim = train_ehr.shape[1]
         print(f"\n[Pipeline] EHR features: ehr_dim={ehr_dim}")
         print(f"  train_ehr={train_ehr.shape} val_ehr={val_ehr.shape} test_ehr={test_ehr.shape}")
+        print(f"  EHR feature names ({len(ehr_feat_names)}):")
+        for i, name in enumerate(ehr_feat_names):
+            print(f"    {i:3d}: {name}")
         pbar.update(1)
 
         pbar.set_description(steps[8])
