@@ -17,7 +17,12 @@ from src.models.mlp import (
     run_mlp_weighted_pipeline,
     run_mlp_embedding_pipeline
 )
-from src.models.cardiotwin_pipeline import run_cardiotwin_pipeline
+
+from src.models.cardiotwin_pipeline import (
+    run_cardiotwin_pipeline,
+    # run_cardiotwin_ablation_pipeline,
+    # CardioTwinConfig,
+)
 
 def load_config(config_path):
     """Load a JSON configuration file."""
@@ -204,7 +209,6 @@ def run_cardiotwin(args):
     out_path = Path(config["paths"]["out_dir"])
 
     run_cardiotwin_pipeline(in_dir, config_path, out_path)
-    print("✓ CardioTwin pipeline completed")
 
 
 def main():
@@ -294,6 +298,8 @@ def main():
     parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
     parser.add_argument("--skip-xgboost-base", action="store_true", help="Skip XGBoost base model")
     parser.add_argument("--skip-xgboost-embedding", action="store_true", help="Skip XGBoost embedding model")
+    parser.add_argument("--skip-xgboost-smote", action="store_true", help="Skip XGBoost SMOTE model")
+    parser.add_argument("--skip-xgboost-weighted", action="store_true", help="Skip XGBoost weighted model")
     parser.add_argument("--skip-mlp-baseline", action="store_true", help="Skip MLP baseline model")
     parser.add_argument("--skip-mlp-weighted", action="store_true", help="Skip MLP weighted model")
     parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
@@ -306,9 +312,7 @@ def main():
     # Determine what to run
     run_all = args.all or not any([
         args.static, args.ecg, args.vitals, args.entities,
-        args.xgb_base, args.xgb_weighted, args.xgb_smote, args.xgb_embedding,
-        args.mlp_baseline, args.mlp_weighted, args.mlp_smote, args.mlp_embedding,
-        args.lstm_baseline, args.cardiotwin
+        args.cardiotwin
     ])
 
     print("=" * 60)
@@ -364,13 +368,18 @@ def main():
     if (run_all and not args.skip_mlp_embedding) or args.mlp_embedding:
         run_mlp_embedding(args)
 
-    # LSTM Baseline Model
-    if (run_all and not args.skip_lstm_baseline) or args.lstm_baseline:
-        run_lstm_baseline(args)
-
     # CardioTwin full pipeline
     if (run_all and not args.skip_cardiotwin) or args.cardiotwin:
         run_cardiotwin(args)
+
+    # if getattr(args, "cardiotwin_focal", False):
+    #     run_cardiotwin_focal(args)
+
+    # if getattr(args, "cardiotwin_concat", False):
+    #     run_cardiotwin_concat(args)
+
+    # if getattr(args, "cardiotwin_ablation", False):
+    #     run_cardiotwin_ablation(args)
 
 if __name__ == "__main__":
     main()

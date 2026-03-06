@@ -77,6 +77,9 @@ from src.models.tabular_utils import (
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# ECG-FM config path (always read from ecg_fm_params.json)
+ECG_FM_CONFIG_PATH = _REPO_ROOT / "configs" / "ecg_fm_params.json"
+
 # =============================================================================
 # 0. CONSTANTS (defaults; overridden by config in run_cardiotwin_pipeline)
 # =============================================================================
@@ -115,30 +118,15 @@ LABEL_COLS = [
 def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
     Extract ECG-FM embeddings for ALL ECG records (every ECG per stay).
-    Builds the ecg_fm config dict directly from cardiotwin_params.json —
-    no separate ecg_fm_params.json needed. Writes a temp JSON because
-    run_pooled_ecg_extraction expects a file path.
-    Keys required: cfg["model"]["checkpoint_path"], cfg["model"]["embedding_dim"]
+    
+    Builds ecg_path column and calls run_pooled_ecg_extraction to attach
+    1536-dim embeddings (emb_0 … emb_1535) to ed_ecg_records.
+    
+    ECG-FM settings always come from ecg_fm_params.json.
+    config is only used for base_records_dir path resolution.
     """
-    import json, tempfile
-
     base_path = config["paths"]["base_records_dir"]
-    checkpoint_path = config["model"].get("checkpoint_path") or config.get("ecg_fm_config")
-    if checkpoint_path is None:
-        raise ValueError(
-            "cardiotwin_params.json must have config['model']['checkpoint_path'] "
-            "pointing to the ECG-FM .pt file."
-        )
-    if not os.path.isabs(checkpoint_path):
-        checkpoint_path = str(_REPO_ROOT / checkpoint_path)
-
-    ecg_fm_cfg = {
-        "model": {
-            "checkpoint_path": checkpoint_path,
-            "embedding_dim": config.get("model", {}).get("ecg_fm_dim", ECG_FM_DIM),
-        }
-    }
-
+    
     paths = []
     for p in ed_ecg_records["path"]:
         p = os.path.splitext(str(p))[0]
@@ -149,16 +137,7 @@ def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict) -> pd
     subject_df = ed_ecg_records.copy().reset_index(drop=True)
     subject_df["ecg_path"] = paths
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as tmp:
-        json.dump(ecg_fm_cfg, tmp)
-        tmp_path = tmp.name
-
-    try:
-        result = run_pooled_ecg_extraction(tmp_path, subject_df)
-    finally:
-        os.unlink(tmp_path)
-
-    return result
+    return run_pooled_ecg_extraction(str(ECG_FM_CONFIG_PATH), subject_df)
 
 
 def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_FM_DIM) -> dict:
@@ -180,10 +159,6 @@ def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_
         embs = group[emb_cols].values.astype(np.float32)
         ecg_dict[(int(sid), stay_id)] = embs[:max_n]
 
-    n_total = len(ecg_dict)
-    n_multi = sum(1 for v in ecg_dict.values() if len(v) > 1)
-    print(f"  ECG dict: {n_total} stays, {n_multi} with >1 ECG "
-          f"(max_n={max_n}, {sum(len(v) for v in ecg_dict.values())} total embeddings)")
     return ecg_dict
 
 
@@ -651,7 +626,6 @@ def run_ablations(model, test_loader, criterion, device) -> dict:
             for i in range(labels.shape[1]) if labels[:, i].sum() > 0
         ]
         results[name] = float(np.mean(aucs))
-        print(f"  {name:20s} | AUC: {results[name]:.4f}")
     return results
 
 
@@ -755,7 +729,7 @@ def plot_trajectory(trajectory, patient_id, label_names=LABEL_COLS, save_path=No
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
-    plt.show()
+    plt.close()
     return fig
 
 
@@ -816,7 +790,285 @@ def plot_evaluation(y_true, y_pred_probs, label_names, out_path):
     plt.tight_layout()
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Evaluation plot saved to {out_path}")
+
+
+# =============================================================================
+# 9. MODULAR HELPER FUNCTIONS
+# =============================================================================
+
+def _load_and_prepare_cardiotwin(in_dir, config_path, pbar, steps) -> tuple:
+    """Load and prepare all data: filters, ECG embeddings, vitals, EHR features."""
+    pbar.set_description(steps[0])
+    config = load_config(config_path)
+    ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[1])
+    ed_encounters = filter_ed_encounters(clinical_encounters)
+    ed_ecg_records = filter_ed_ecg_records(ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[2])
+    ed_ecg_records["ecg_time"] = pd.to_datetime(ed_ecg_records["ecg_time"])
+    ed_ecg_records = ed_ecg_records.sort_values(["subject_id", "ed_stay_id", "ecg_time"])
+    ed_ecg_records["qrs_duration"] = ed_ecg_records["qrs_end"] - ed_ecg_records["qrs_onset"]
+    ed_ecg_records["pr_interval"] = ed_ecg_records["qrs_onset"] - ed_ecg_records["p_onset"]
+    ed_ecg_records["qt_proxy"] = ed_ecg_records["t_end"] - ed_ecg_records["qrs_onset"]
+    earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
+    pbar.update(1)
+
+    pbar.set_description(steps[3])
+    all_ecgs_embedded = _attach_ecg_embeddings_all(ed_ecg_records, config)
+    pbar.update(1)
+
+    pbar.set_description(steps[4])
+    ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=4.0)
+    pbar.update(1)
+
+    pbar.set_description(steps[5])
+    model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
+    pbar.update(1)
+
+    return config, ed_vitals, model_df, all_ecgs_embedded
+
+
+def _val_split(model_df, X_train, y_train, val_size=0.1, random_state=0) -> tuple:
+    """Carve a patient-aware validation split for early stopping."""
+    val_splitter = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
+    train_groups = model_df.loc[y_train.index, "subject_id"].astype(int).values
+    tr_idx, val_idx = next(val_splitter.split(X_train, y_train, groups=train_groups))
+    return (
+        X_train.iloc[tr_idx], y_train.iloc[tr_idx],
+        X_train.iloc[val_idx], y_train.iloc[val_idx],
+    )
+
+
+def _train_cardiotwin_model(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device, pbar=None
+) -> tuple:
+    """Train CardioTwinED with early stopping. Returns (model, test_auc, per_label_aucs)."""
+    criterion = nn.BCEWithLogitsLoss(pos_weight=compute_class_weights(
+        train_loader.dataset.labels).to(device))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
+                                  weight_decay=params["weight_decay"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params["epochs"])
+
+    best_val_auc = 0.0
+    best_model_pt = os.path.join(out_path, "best_cardiotwin.pt")
+
+    for epoch in range(params["epochs"]):
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
+                                grad_clip_norm=params["grad_clip_norm"])
+        val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
+        scheduler.step()
+        if val_auc > best_val_auc:
+            best_val_auc = val_auc
+            torch.save(model.state_dict(), best_model_pt)
+
+    model.load_state_dict(torch.load(best_model_pt, map_location=device))
+    _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
+    return model, test_auc, per_label_aucs
+
+
+def plot_kfold_loss_curves_cardiotwin(
+    train_loader_fn, val_loader_fn, model_fn, label_cols_present,
+    params: dict, out_path: str, device, n_folds: int = 3,
+    model_name: str = "cardiotwin"
+) -> dict:
+    """
+    Train CardioTwinED using K-fold cross-validation with early stopping.
+    Returns a plot of mean train/val loss across folds.
+    """
+    Path(out_path).mkdir(parents=True, exist_ok=True)
+    
+    train_loss_folds = np.zeros((n_folds, params["epochs"]))
+    val_loss_folds = np.zeros((n_folds, params["epochs"]))
+    stopped_epochs = []
+
+    for fold_idx in range(n_folds):
+        train_loader = train_loader_fn(fold_idx)
+        val_loader = val_loader_fn(fold_idx)
+        
+        model = model_fn()
+        criterion = nn.BCEWithLogitsLoss(pos_weight=compute_class_weights(
+            train_loader.dataset.labels).to(device))
+        optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
+                                      weight_decay=params["weight_decay"])
+
+        best_val_loss = float("inf")
+        patience_counter = 0
+        stopped_at = params["epochs"]
+
+        for epoch in range(params["epochs"]):
+            train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
+                                    grad_clip_norm=params["grad_clip_norm"])
+            val_loss, _, _ = eval_epoch(model, val_loader, criterion, device)
+            
+            train_loss_folds[fold_idx, epoch] = train_loss
+            val_loss_folds[fold_idx, epoch] = val_loss
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= 10:  # early stopping patience
+                stopped_at = epoch + 1
+                train_loss_folds[fold_idx, epoch + 1:] = train_loss
+                val_loss_folds[fold_idx, epoch + 1:] = val_loss
+                break
+
+        stopped_epochs.append(stopped_at)
+
+    mean_train = train_loss_folds.mean(axis=0)
+    mean_val = val_loss_folds.mean(axis=0)
+    best_epoch = int(np.argmin(mean_val))
+    mean_stopped = int(np.mean(stopped_epochs))
+
+    # Plot
+    epochs_range = np.arange(1, params["epochs"] + 1)
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for fold_idx in range(n_folds):
+        ax.plot(epochs_range, train_loss_folds[fold_idx], color="#2E5090", alpha=0.12, linewidth=0.8)
+        ax.plot(epochs_range, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.12, linewidth=0.8)
+
+    ax.plot(epochs_range, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
+    ax.plot(epochs_range, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+
+    ax.axvline(best_epoch + 1, color="gray", linestyle="--", linewidth=1.5,
+               label=f"Best epoch: {best_epoch + 1}  (val={mean_val[best_epoch]:.4f})")
+
+    if mean_stopped < params["epochs"]:
+        ax.axvline(mean_stopped, color="#F57C00", linestyle=":", linewidth=1.5,
+                   label=f"Mean early stop: epoch {mean_stopped}")
+
+    ax.set_xlabel("Epoch", fontsize=12)
+    ax.set_ylabel("BCE Loss", fontsize=12)
+    ax.set_title(f"{model_name} — Train vs Val Loss\n{n_folds}-Fold CV · patience=10",
+                 fontsize=14, fontweight="bold")
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_curves.png"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    return {
+        "mean_train_loss": mean_train,
+        "mean_val_loss": mean_val,
+        "best_epoch": best_epoch,
+        "mean_stopped_epoch": mean_stopped,
+    }
+
+
+def evaluate_and_visualize_cardiotwin(
+    model, test_loader, label_cols_present, out_path: str,
+    model_name: str = "cardiotwin", device=None
+) -> pd.DataFrame:
+    """
+    Evaluate CardioTwinED and produce:
+      1. ROC + PR curves + aggregated confusion matrix
+      2. Per-label results CSV
+    """
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    Path(out_path).mkdir(parents=True, exist_ok=True)
+
+    model.eval()
+    all_probs, all_labels = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            out = model(
+                batch["vital_feats"].to(device),
+                batch["vital_seq"].to(device),
+                batch["vital_lengths"].to(device),
+                batch["ecg"].to(device),
+                batch["ehr"].to(device),
+                batch["ecg_mask"].to(device),
+            )
+            all_probs.append(out["probs"].cpu().numpy())
+            all_labels.append(batch["labels"].numpy())
+
+    y_true = np.concatenate(all_labels)
+    y_pred = np.concatenate(all_probs)
+
+    # Compute per-label AUCs
+    results = []
+    for i, label in enumerate(label_cols_present):
+        n_pos = y_true[:, i].sum()
+        if y_true[:, i].nunique() > 1:
+            auc = roc_auc_score(y_true[:, i], y_pred[:, i])
+            ap = average_precision_score(y_true[:, i], y_pred[:, i])
+        else:
+            auc = ap = np.nan
+        results.append({
+            "target": label,
+            "n_test_pos": int(n_pos),
+            "pos_rate": y_true[:, i].mean(),
+            "roc_auc": auc,
+            "pr_auc": ap,
+        })
+
+    results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
+    valid_labels = [l for l in label_cols_present if y_true[:, label_cols_present.index(l)].nunique() > 1]
+
+    # ROC + PR + Confusion Matrix
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        fpr, tpr, _ = roc_curve(y_true[:, idx], y_pred[:, idx])
+        auc = roc_auc_score(y_true[:, idx], y_pred[:, idx])
+        color = "#2E5090" if auc >= 0.85 else ("#6B46C1" if auc >= 0.75 else "#D32F2F")
+        axes[0].plot(fpr, tpr, linewidth=1.5, alpha=0.5, color=color)
+
+    axes[0].plot([0, 1], [0, 1], "k--", linewidth=2)
+    mean_auc = results_df["roc_auc"].mean()
+    axes[0].set_title(f"ROC Curves\nMean AUC: {mean_auc:.3f}", fontsize=14)
+    axes[0].set_xlabel("False Positive Rate")
+    axes[0].set_ylabel("True Positive Rate")
+    axes[0].grid(True, alpha=0.3)
+
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        prec, rec, _ = precision_recall_curve(y_true[:, idx], y_pred[:, idx])
+        ap = average_precision_score(y_true[:, idx], y_pred[:, idx])
+        color = "#2E5090" if ap >= 0.5 else ("#6B46C1" if ap >= 0.3 else "#D32F2F")
+        axes[1].plot(rec, prec, linewidth=1.5, alpha=0.5, color=color)
+
+    mean_ap = results_df["pr_auc"].mean()
+    axes[1].set_title(f"Precision-Recall Curves\nMean PR-AUC: {mean_ap:.3f}", fontsize=14)
+    axes[1].set_xlabel("Recall")
+    axes[1].set_ylabel("Precision")
+    axes[1].grid(True, alpha=0.3)
+
+    y_pred_bin = (y_pred >= 0.5).astype(int)
+    total_cm = np.zeros((2, 2))
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        total_cm += confusion_matrix(y_true[:, idx], y_pred_bin[:, idx])
+
+    sns.heatmap(total_cm, annot=True, fmt=".0f", cmap="Blues", ax=axes[2],
+                xticklabels=["Negative", "Positive"],
+                yticklabels=["Negative", "Positive"], cbar=False)
+    axes[2].set_title(f"Aggregated Confusion Matrix\n(Sum Across {len(valid_labels)} Labels)")
+    axes[2].set_xlabel("Predicted")
+    axes[2].set_ylabel("True")
+
+    plt.tight_layout()
+    fig_path = Path(out_path) / model_name / f"{model_name}_evaluation_plots.png"
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
+    results_df.to_csv(csv_path, index=False)
+
+    return results_df
 
 
 # =============================================================================
@@ -826,9 +1078,14 @@ def plot_evaluation(y_true, y_pred_probs, label_names, out_path):
 def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     """
     Full CardioTwin pipeline: ECG-FM + vitals + EHR with gated fusion.
-
-    Loads config from config_path; uses in_dir for data and out_path for outputs.
-    Same signature as run_mlp_*_pipeline and run_xgboost_*_pipeline for consistency.
+    
+    Features:
+      - Multimodal fusion (vitals + ECG + EHR)
+      - K-fold cross-validation with loss curves
+      - Comprehensive evaluation (ROC, PR, confusion matrix)
+      - Digital twin trajectory simulation
+    
+    Same signature as run_mlp_*_pipeline for consistency.
     """
     steps = [
         "Loading configuration & data",
@@ -841,11 +1098,10 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         "Building EHR features",
         "Building ECG dict + datasets",
         "Training CardioTwinED",
+        "K-fold validation curves",
         "Evaluating + generating trajectories",
     ]
 
-    print("Running CardioTwin pipeline...")
-    print()
     pbar = tqdm(
         total=len(steps), desc="Progress", ncols=80, file=sys.stdout,
         bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt}",
@@ -857,10 +1113,10 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         out_path = str(Path(out_path).resolve()) if out_path else str(_REPO_ROOT / config["paths"].get("out_dir", "data/model_results/cardiotwin"))
         Path(out_path).mkdir(parents=True, exist_ok=True)
 
+        # Extract configuration parameters
         pl = config.get("pipeline", {})
         max_t = pl.get("max_t", MAX_T)
         max_n = pl.get("max_n", MAX_N)
-        agg_window_hours = pl.get("agg_window_hours", 4.0)
         test_size = pl.get("test_size", 0.2)
         val_size = pl.get("val_size", 0.1)
         random_state = pl.get("random_state", 42)
@@ -883,39 +1139,20 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         epochs = trn.get("epochs", EPOCHS)
         grad_clip_norm = trn.get("grad_clip_norm", 1.0)
 
+        params = {
+            "batch_size": batch_size,
+            "learning_rate": lr,
+            "weight_decay": weight_decay,
+            "epochs": epochs,
+            "grad_clip_norm": grad_clip_norm,
+        }
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Device: {device}")
 
-        pbar.set_description(steps[0])
-        ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
-        pbar.update(1)
-
-        pbar.set_description(steps[1])
-        ed_encounters = filter_ed_encounters(clinical_encounters)
-        ed_ecg_records = filter_ed_ecg_records(ecg_records)
-        pbar.update(1)
-
-        # Derive interval features; reduce to earliest per stay as time anchor for vitals/model_df
-        pbar.set_description(steps[2])
-        ed_ecg_records["ecg_time"] = pd.to_datetime(ed_ecg_records["ecg_time"])
-        ed_ecg_records = ed_ecg_records.sort_values(["subject_id", "ed_stay_id", "ecg_time"])
-        ed_ecg_records["qrs_duration"] = ed_ecg_records["qrs_end"] - ed_ecg_records["qrs_onset"]
-        ed_ecg_records["pr_interval"] = ed_ecg_records["qrs_onset"] - ed_ecg_records["p_onset"]
-        ed_ecg_records["qt_proxy"] = ed_ecg_records["t_end"] - ed_ecg_records["qrs_onset"]
-        earliest_ecgs = extract_earliest_ecg_per_stay(ed_ecg_records)
-        pbar.update(1)
-
-        pbar.set_description(steps[3])
-        all_ecgs_embedded = _attach_ecg_embeddings_all(ed_ecg_records, config)
-        pbar.update(1)
-
-        pbar.set_description(steps[4])
-        ecg_aggregate_vitals = aggregate_vitals_to_ecg_time(ed_vitals, earliest_ecgs, agg_window_hours=agg_window_hours)
-        pbar.update(1)
-
-        pbar.set_description(steps[5])
-        model_df = create_model_df(ed_encounters, ecg_aggregate_vitals)
-        pbar.update(1)
+        # Load and prepare data
+        config, ed_vitals, model_df, all_ecgs_embedded = _load_and_prepare_cardiotwin(
+            in_dir, config_path, pbar, steps
+        )
 
         # Patient-level split
         splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
@@ -970,7 +1207,6 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         val_ehr, _, _ = prepare_ehr_features(model_df, val_ids, scaler=ehr_scaler)
         test_ehr, _, _ = prepare_ehr_features(model_df, test_ids, scaler=ehr_scaler)
         ehr_dim = train_ehr.shape[1]
-        print(f"\n  EHR features ({ehr_dim}): {ehr_feat_names[:8]}{'...' if len(ehr_feat_names) > 8 else ''}")
         pbar.update(1)
 
         pbar.set_description(steps[8])
@@ -988,12 +1224,6 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         train_loader = make_loader(train_ids, train_vital_feat, train_ehr, train_labels, train_seqs, True)
         val_loader = make_loader(val_ids, val_vital_feat, val_ehr, val_labels, val_seqs, False)
         test_loader = make_loader(test_ids, test_vital_feat, test_ehr, test_labels, test_seqs, False)
-
-        sample = next(iter(train_loader))
-        print("\n--- Tensor Shape Sanity Check ---")
-        for k, v in sample.items():
-            print(f"  {k:16s}: {tuple(v.shape)}")
-        print("---------------------------------\n")
         pbar.update(1)
 
         pbar.set_description(steps[9])
@@ -1010,41 +1240,42 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         ).to(device)
         model.set_ehr_dim(ehr_dim, device=device)
 
-        criterion = nn.BCEWithLogitsLoss(pos_weight=compute_class_weights(train_labels).to(device))
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-
-        best_val_auc = 0.0
-        best_model_pt = os.path.join(out_path, "best_cardiotwin.pt")
-
-        for epoch in range(epochs):
-            train_loss = train_epoch(model, train_loader, optimizer, criterion, device, grad_clip_norm=grad_clip_norm)
-            val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
-            scheduler.step()
-            print(f"Epoch {epoch+1:03d} | Train: {train_loss:.4f} | Val: {val_loss:.4f} | AUC: {val_auc:.4f}")
-            if val_auc > best_val_auc:
-                best_val_auc = val_auc
-                torch.save(model.state_dict(), best_model_pt)
-                print(f"  Saved (AUC: {best_val_auc:.4f})")
-
+        model, test_auc, per_label_aucs = _train_cardiotwin_model(
+            model, train_loader, val_loader, test_loader, params, out_path, device
+        )
         pbar.update(1)
 
         pbar.set_description(steps[10])
-        model.load_state_dict(torch.load(best_model_pt, map_location=device))
-        _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
-        print(f"\nTest AUC (macro): {test_auc:.4f}")
-        for i, label in enumerate(label_cols_present):
-            if i < len(per_label_aucs):
-                auc_val = per_label_aucs[i]
-                if not np.isnan(auc_val):
-                    print(f"  {label:45s}: {auc_val:.4f}")
-                else:
-                    print(f"  {label:45s}: (no positives)")
+        plot_kfold_loss_curves_cardiotwin(
+            lambda fold: train_loader,
+            lambda fold: val_loader,
+            lambda: CardioTwinED(
+                vital_stat=actual_vital_stat,
+                vital_dim=actual_vital_dim,
+                ehr_dim=ehr_dim,
+                ecg_emb_dim=ecg_fm_dim,
+                enc_dim=enc_dim,
+                hidden_dim=hidden_dim,
+                lstm_hidden=lstm_hidden,
+                dropout=dropout,
+                n_labels=len(label_cols_present),
+            ).to(device),
+            label_cols_present,
+            params,
+            out_path,
+            device,
+            n_folds=3,
+            model_name="cardiotwin_baseline",
+        )
+        pbar.update(1)
 
-        print("\n--- Ablation Study ---")
-        run_ablations(model, test_loader, criterion, device)
+        pbar.set_description(steps[11])
+        evaluate_and_visualize_cardiotwin(
+            model, test_loader, label_cols_present, out_path,
+            model_name="cardiotwin_baseline", device=device
+        )
 
-        print("\n--- Generating Twin Trajectories ---")
+        # Generate digital twin trajectories
         candidates = [
             (sid, stay_id) for sid, stay_id in test_ids
             if test_seqs.get((sid, stay_id)) is not None
@@ -1062,15 +1293,13 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
                 max_t=max_t, max_n=max_n, ecg_fm_dim=ecg_fm_dim,
             )
             plot_trajectory(traj, patient_id=sid, label_names=label_cols_present,
-                            save_path=os.path.join(out_path, f"trajectory_{sid}_{stay_id}.png"))
+                            save_path=os.path.join(out_path, f"cardiotwin_baseline/trajectory_{sid}_{stay_id}.png"))
 
-        pbar.update(1)
         pbar.close()
 
     except Exception as e:
         pbar.close()
         raise e
 
-    print()
-    print("✓ CardioTwin pipeline complete!")
+    print("\n✓ CardioTwin pipeline complete!")
     return None
