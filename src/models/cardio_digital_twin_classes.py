@@ -251,3 +251,57 @@ class CardioTwinED(nn.Module):
             "gates": gates,
             "latent": shared,
         }
+
+# =============================================================================
+# NO-GATE BASELINE (ablation: mean-pooled fusion instead of learned gate)
+# =============================================================================
+
+class CardioTwinED_NoGate(CardioTwinED):
+    """
+    Ablation variant — same enc_dim=128 encoders as Baseline but replaces the
+    learned gate with a simple mean pooling of the three modality encodings.
+
+    Instead of:
+        gates = softmax(Linear(384→128)→Linear(128→3))
+        fused = gates[:,0]*vital + gates[:,1]*ecg + gates[:,2]*ehr
+    We do:
+        fused = (vital_enc + ecg_enc + ehr_enc) / 3
+
+    This isolates the contribution of the gating mechanism. If Baseline > NoGate
+    the gate is learning something real; if not, mean pooling is sufficient.
+    The gate and ehr_encoder are still built via set_ehr_dim() so the interface
+    is identical — gate weights are just not used in forward().
+    """
+    def __init__(self, vital_stat=VITAL_STAT, vital_dim=VITAL_DIM, ehr_dim=None,
+                 ecg_emb_dim=ECG_FM_DIM, lstm_hidden=LSTM_HIDDEN,
+                 dropout=DROPOUT, n_labels=N_LABELS):
+        super().__init__(
+            vital_stat=vital_stat, vital_dim=vital_dim, ehr_dim=ehr_dim,
+            ecg_emb_dim=ecg_emb_dim, enc_dim=128, hidden_dim=256,
+            lstm_hidden=lstm_hidden, dropout=dropout, n_labels=n_labels,
+        )
+
+    def forward(self, vital_feats, vital_seq, vital_lengths, ecg_embs, ehr_x, ecg_mask=None):
+        device = vital_feats.device
+        if self.ehr_encoder is None:
+            self.set_ehr_dim(ehr_x.size(1), device=device)
+
+        vital_enc = self._encode_vitals(vital_feats, vital_seq, vital_lengths)
+        ecg_enc = self._encode_ecg(ecg_embs, ecg_mask)
+        ehr_enc = self.ehr_encoder(ehr_x)
+
+        # Mean pool — no gate
+        fused = (vital_enc + ecg_enc + ehr_enc) / 3.0
+        # Uniform gate weights returned for API compatibility with trajectory plots
+        B = vital_feats.size(0)
+        gates = torch.full((B, 3), 1.0 / 3.0, device=device, dtype=vital_feats.dtype)
+
+        shared = self.fusion(fused)
+        logits = self.dx_head(shared)
+
+        return {
+            "logits": logits,
+            "probs": torch.sigmoid(logits),
+            "gates": gates,
+            "latent": shared,
+        }

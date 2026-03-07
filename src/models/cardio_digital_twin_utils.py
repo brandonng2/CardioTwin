@@ -972,3 +972,140 @@ def _run_trajectories(model, test_ids, test_seqs, test_ehr, ecg_dict,
             traj, patient_id=sid, label_names=label_cols_present,
             save_path=os.path.join(out_path, f"{model_name}/trajectory_{sid}_{stay_id}.png"),
         )
+
+# =============================================================================
+# LOSS FUNCTION VARIANTS
+# =============================================================================
+
+class FocalLoss(nn.Module):
+    """
+    Sigmoid focal loss for multilabel imbalanced classification.
+
+    FL(p) = -alpha * (1-p)^gamma * log(p)   for positives
+          = -(1-alpha) * p^gamma * log(1-p)  for negatives
+
+    alpha : scalar weight on positive class (default 0.25, same as original paper)
+    gamma : focusing exponent — higher = more focus on hard examples (default 2.0)
+
+    Operates on raw logits (applies sigmoid internally).
+    Output is mean over all (sample, label) pairs — same reduction as BCEWithLogitsLoss.
+    """
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probs = torch.sigmoid(logits)
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal_weight = alpha_t * (1 - p_t) ** self.gamma
+        return (focal_weight * bce).mean()
+
+
+def _build_criterion(loss_type: str, train_loader, device) -> nn.Module:
+    """
+    Construct the loss criterion by name.
+
+    loss_type options:
+      "bce"         — plain BCEWithLogitsLoss (current default)
+      "bce_weighted"— BCEWithLogitsLoss with pos_weight = n_neg/n_pos per label
+      "focal"       — FocalLoss(alpha=0.25, gamma=2.0)
+    """
+    if loss_type == "bce":
+        return nn.BCEWithLogitsLoss()
+    if loss_type == "bce_weighted":
+        pos_weight = compute_class_weights(train_loader.dataset.labels).to(device)
+        return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    if loss_type == "focal":
+        return FocalLoss(alpha=0.25, gamma=2.0)
+    raise ValueError(f"Unknown loss_type '{loss_type}'. Choose: bce | bce_weighted | focal")
+
+
+def train_cardiotwin_model_bce(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device, model_name: str = "cardio_digital_twin_baseline"
+) -> tuple:
+    """
+    Train with plain BCEWithLogitsLoss (current baseline).
+    Returns (model, test_auc, per_label_aucs).
+    """
+    criterion = nn.BCEWithLogitsLoss()
+    return _train_with_criterion(
+        model, train_loader, val_loader, test_loader,
+        params, out_path, device, model_name, criterion,
+    )
+
+
+def train_cardiotwin_model_bce_weighted(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device, model_name: str = "cardio_digital_twin_baseline"
+) -> tuple:
+    """
+    Train with BCE + pos_weight (n_neg/n_pos per label).
+    Up-weights rare labels like ami_stemi at train time.
+    Returns (model, test_auc, per_label_aucs).
+    """
+    pos_weight = compute_class_weights(train_loader.dataset.labels).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    return _train_with_criterion(
+        model, train_loader, val_loader, test_loader,
+        params, out_path, device, model_name, criterion,
+    )
+
+
+def train_cardiotwin_model_focal(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device, model_name: str = "cardio_digital_twin_baseline",
+    focal_alpha: float = 0.25, focal_gamma: float = 2.0,
+) -> tuple:
+    """
+    Train with Focal Loss (alpha=0.25, gamma=2.0 by default).
+    Focuses gradient on hard / misclassified examples — better for extreme imbalance.
+    Returns (model, test_auc, per_label_aucs).
+    """
+    criterion = FocalLoss(alpha=focal_alpha, gamma=focal_gamma)
+    return _train_with_criterion(
+        model, train_loader, val_loader, test_loader,
+        params, out_path, device, model_name, criterion,
+    )
+
+
+def _train_with_criterion(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device, model_name: str,
+    criterion: nn.Module,
+) -> tuple:
+    """
+    Shared training loop used by all three loss-variant trainers.
+    Early stopping on val macro-AUC. Saves best checkpoint to out_path/model_name/.
+    Returns (model, test_auc, per_label_aucs).
+    """
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"]
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params["epochs"])
+
+    best_val_auc = 0.0
+    out_dir = Path(out_path) / model_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    best_model_pt = str(out_dir / f"{model_name}.pt")
+
+    for epoch in range(params["epochs"]):
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
+                                 grad_clip_norm=params["grad_clip_norm"])
+        val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
+        scheduler.step()
+        improved = val_auc > best_val_auc
+        if improved:
+            best_val_auc = val_auc
+            torch.save(model.state_dict(), best_model_pt)
+        log.info("Epoch %3d/%d | train=%.4f val=%.4f auc=%.4f%s",
+                 epoch + 1, params["epochs"], train_loss, val_loss, val_auc,
+                 " ✓" if improved else "")
+
+    model.load_state_dict(torch.load(best_model_pt, map_location=device))
+    _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
+    log.info("Best val_auc=%.4f | test_auc=%.4f", best_val_auc, test_auc)
+    return model, test_auc, per_label_aucs
