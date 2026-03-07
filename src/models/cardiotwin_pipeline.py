@@ -36,6 +36,7 @@
 #   t steps, keep ECG/EHR constant. Yields probs/gates/latent over time.
 # =============================================================================
 
+import logging
 import os
 import sys
 import warnings
@@ -75,19 +76,20 @@ from src.models.tabular_utils import (
     load_data_files,
 )
 
+log = logging.getLogger(__name__)
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# ECG-FM config path (always read from ecg_fm_params.json)
 ECG_FM_CONFIG_PATH = _REPO_ROOT / "configs" / "ecg_fm_params.json"
 
 # =============================================================================
 # 0. CONSTANTS (defaults; overridden by config in run_cardiotwin_pipeline)
 # =============================================================================
 
-MAX_T = 12       # max vital timesteps per ED stay
-MAX_N = 2        # max ECGs per stay
-VITAL_DIM = 6    # hr, sbp, dbp, resp_rate, spo2, temperature
-VITAL_STAT = 30  # 5 stats x 6 vitals
+MAX_T = 12
+MAX_N = 2
+VITAL_DIM = 6
+VITAL_STAT = 30
 ECG_FM_DIM = 1536
 ENC_DIM = 128
 HIDDEN_DIM = 256
@@ -118,15 +120,14 @@ LABEL_COLS = [
 def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
     Extract ECG-FM embeddings for ALL ECG records (every ECG per stay).
-    
+
     Builds ecg_path column and calls run_pooled_ecg_extraction to attach
-    1536-dim embeddings (emb_0 … emb_1535) to ed_ecg_records.
-    
+    1536-dim embeddings (emb_0 ... emb_1535) to ed_ecg_records.
+
     ECG-FM settings always come from ecg_fm_params.json.
     config is only used for base_records_dir path resolution.
     """
     base_path = config["paths"]["base_records_dir"]
-    
     paths = []
     for p in ed_ecg_records["path"]:
         p = os.path.splitext(str(p))[0]
@@ -136,7 +137,6 @@ def _attach_ecg_embeddings_all(ed_ecg_records: pd.DataFrame, config: dict) -> pd
 
     subject_df = ed_ecg_records.copy().reset_index(drop=True)
     subject_df["ecg_path"] = paths
-
     return run_pooled_ecg_extraction(str(ECG_FM_CONFIG_PATH), subject_df)
 
 
@@ -146,8 +146,7 @@ def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_
     Returns dict: (subject_id int, ed_stay_id) -> np.array (N, ecg_fm_dim).
 
     All ECGs per stay are included up to max_n, sorted chronologically.
-    The model's attention layer learns which ECG is most diagnostically
-    relevant per stay.
+    The model's attention layer learns which ECG is most diagnostically relevant.
     """
     emb_cols = [f"emb_{i}" for i in range(ecg_fm_dim)]
     stay_col = "ed_stay_id" if "ed_stay_id" in ecg_df.columns else "stay_id"
@@ -159,16 +158,10 @@ def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_
         embs = group[emb_cols].values.astype(np.float32)
         ecg_dict[(int(sid), stay_id)] = embs[:max_n]
 
-    n_stays_with_ecg = len(ecg_dict)
-    ecg_counts = [v.shape[0] for v in ecg_dict.values()]
-    print(f"\n[ECG] ecg_dict: {n_stays_with_ecg} stays | "
-          f"ECGs per stay — min:{min(ecg_counts)} max:{max(ecg_counts)} "
-          f"mean:{np.mean(ecg_counts):.1f} | emb_dim={ecg_fm_dim}")
-
     # Bug 5: NaN ECG embeddings silently corrupt attention pooling
     nan_ecgs = [(k, v) for k, v in ecg_dict.items() if np.isnan(v).any()]
     if nan_ecgs:
-        print(f"  WARNING: {len(nan_ecgs)} stays have NaN ECG embeddings — zeroing out")
+        log.warning("%d stays have NaN ECG embeddings — zeroing out", len(nan_ecgs))
         for k, v in nan_ecgs:
             ecg_dict[k] = np.nan_to_num(v, nan=0.0)
 
@@ -179,16 +172,8 @@ def prepare_ecg(ecg_df: pd.DataFrame, max_n: int = MAX_N, ecg_fm_dim: int = ECG_
 # 2. STREAM 2 — ED VITAL SIGNS
 # =============================================================================
 
-def create_vital_features(ed_vitals_df: pd.DataFrame, scaler=None, fit_scaler: bool = False):
-    """
-    Convert long-format ED vitals to per-stay statistical summary (N, 30).
-    For each of 6 vitals: mean, min, max, std, delta (last - first).
-    Forward-fills within stay, fills remaining NaNs with population median.
-    Returns (vital_feat_df, scaler).
-    """
-    df = ed_vitals_df.copy()
-    stay_col = "stay_id" if "stay_id" in df.columns else "ed_stay_id"
-
+def _preprocess_vitals(df: pd.DataFrame, stay_col: str) -> tuple:
+    """Sort, forward-fill, and median-fill vitals. Returns (df, present_vitals)."""
     if "charttime" in df.columns:
         df["charttime"] = pd.to_datetime(df["charttime"], errors="coerce")
         df = df.sort_values(["subject_id", stay_col, "charttime"])
@@ -199,6 +184,18 @@ def create_vital_features(ed_vitals_df: pd.DataFrame, scaler=None, fit_scaler: b
         .transform(lambda x: x.ffill().bfill())
     )
     df[present_vitals] = df[present_vitals].fillna(df[present_vitals].median())
+    return df, present_vitals
+
+
+def create_vital_features(ed_vitals_df: pd.DataFrame, scaler=None, fit_scaler: bool = False):
+    """
+    Convert long-format ED vitals to per-stay statistical summary (N, 30).
+    For each of 6 vitals: mean, min, max, std, delta (last - first).
+    Returns (vital_feat_df, scaler).
+    """
+    df = ed_vitals_df.copy()
+    stay_col = "stay_id" if "stay_id" in df.columns else "ed_stay_id"
+    df, present_vitals = _preprocess_vitals(df, stay_col)
 
     records = []
     for (sid, stay_id), group in df.groupby(["subject_id", stay_col]):
@@ -225,11 +222,6 @@ def create_vital_features(ed_vitals_df: pd.DataFrame, scaler=None, fit_scaler: b
     elif scaler is not None:
         vital_feat_df[feat_cols] = scaler.transform(vital_feat_df[feat_cols])
 
-    print(f"\n[Vitals] create_vital_features: {len(vital_feat_df)} stays | "
-          f"{len(feat_cols)} stat features | "
-          f"vitals present: {present_vitals} | "
-          f"fit_scaler={fit_scaler}")
-
     return vital_feat_df, scaler
 
 
@@ -241,17 +233,7 @@ def create_vital_sequences(ed_vitals_df: pd.DataFrame, vital_scaler=None, fit_sc
     """
     df = ed_vitals_df.copy()
     stay_col = "stay_id" if "stay_id" in df.columns else "ed_stay_id"
-    present_vitals = [c for c in VITAL_COLS if c in df.columns]
-
-    if "charttime" in df.columns:
-        df["charttime"] = pd.to_datetime(df["charttime"], errors="coerce")
-        df = df.sort_values(["subject_id", stay_col, "charttime"])
-
-    df[present_vitals] = (
-        df.groupby(["subject_id", stay_col])[present_vitals]
-        .transform(lambda x: x.ffill().bfill())
-    )
-    df[present_vitals] = df[present_vitals].fillna(df[present_vitals].median())
+    df, present_vitals = _preprocess_vitals(df, stay_col)
 
     if fit_scaler:
         vital_scaler = StandardScaler()
@@ -262,11 +244,6 @@ def create_vital_sequences(ed_vitals_df: pd.DataFrame, vital_scaler=None, fit_sc
     sequences = {}
     for (sid, stay_id), group in df.groupby(["subject_id", stay_col]):
         sequences[(int(sid), stay_id)] = group[present_vitals].values.astype(np.float32)[:MAX_T]
-
-    seq_lens = [v.shape[0] for v in sequences.values()]
-    print(f"\n[Vitals] create_vital_sequences: {len(sequences)} stays | "
-          f"seq len — min:{min(seq_lens)} max:{max(seq_lens)} mean:{np.mean(seq_lens):.1f} | "
-          f"vitals: {present_vitals} | fit_scaler={fit_scaler}")
 
     return sequences, vital_scaler
 
@@ -290,8 +267,8 @@ def prepare_ehr_features(model_df: pd.DataFrame, subject_stay_ids: list,
     exclude_prefixes = ("label_", "report_", "emb_", "path", "ecg_time", "charttime")
     exclude_exact = {
         "stay_id", "subject_id", "ed_stay_id", "hadm_id", "study_id", "split",
-        "is_cardiovascular", "file_name", "cart_id",  # label-derived flag + ECG identifiers
-        *LABEL_COLS,  # prevent label leakage into EHR features
+        "is_cardiovascular", "file_name", "cart_id",
+        *LABEL_COLS,
     }
 
     candidate_cols = [
@@ -328,13 +305,6 @@ def prepare_ehr_features(model_df: pd.DataFrame, subject_stay_ids: list,
     elif scaler is not None and continuous_cols:
         cont_idx = [all_feat_cols.index(c) for c in continuous_cols]
         X[:, cont_idx] = scaler.transform(X[:, cont_idx])
-
-    nan_rows = np.isnan(X).any(axis=1).sum()
-    print(f"\n[EHR] prepare_ehr_features: shape={X.shape} | "
-          f"continuous={len(continuous_cols)} binary={len(binary_cols)} | "
-          f"rows with NaN after fillna={nan_rows} | fit_scaler={fit_scaler}")
-    if fit_scaler:
-        print(f"      feature names: {all_feat_cols[:8]}{'...' if len(all_feat_cols) > 8 else ''}")
 
     return X, scaler, all_feat_cols
 
@@ -383,36 +353,18 @@ class CardioEDDataset(Dataset):
             f"Ensure prepare_ehr_features() is called with the same ids list passed here."
         )
 
-        label_cols_in_df = [c for c in LABEL_COLS if c in self.labels.columns]
-        ecg_coverage = sum(1 for sid, stay in subject_stay_ids if (int(sid), stay) in ecg_dict)
-        vital_coverage = sum(1 for sid, stay in subject_stay_ids if (int(sid), stay) in self.vital_feats.index)
-        print(f"\n[Dataset] CardioEDDataset: {len(subject_stay_ids)} stays | "
-              f"label cols={len(label_cols_in_df)}/17 | "
-              f"ECG coverage={ecg_coverage}/{len(subject_stay_ids)} | "
-              f"vital coverage={vital_coverage}/{len(subject_stay_ids)}")
-        if len(label_cols_in_df) > 0:
-            label_matrix = self.labels[label_cols_in_df].values
-            pos_rates = label_matrix.mean(axis=0)
-            print(f"      label prevalence (top 5 by rate): "
-                  + str({label_cols_in_df[i]: f"{pos_rates[i]:.3f}"
-                         for i in np.argsort(pos_rates)[::-1][:5]}))
-
     def __len__(self):
         return len(self.ids)
 
     def __getitem__(self, idx):
         sid, stay_id = self.ids[idx]
-
         feat_cols = [c for c in self.vital_feats.columns if c.startswith("vf_")]
         vital_feats = self.vital_feats.loc[(sid, stay_id)][feat_cols].values.astype(np.float32)
-
         ecg = self.ecg_dict.get((int(sid), stay_id), np.zeros((1, self.ecg_fm_dim), dtype=np.float32))
-
         labels = self.labels.loc[(sid, stay_id)][LABEL_COLS].values.astype(np.float32)
         vital_seq = self.vital_sequences.get(
             (sid, stay_id), np.zeros((1, self.vital_dim), dtype=np.float32)
         )
-
         return {
             "vital_feats": vital_feats,
             "vital_seq": vital_seq,
@@ -618,7 +570,7 @@ def train_epoch(model, loader, optimizer, criterion, device, grad_clip_norm: flo
 
 @torch.no_grad()
 def eval_epoch(model, loader, criterion, device):
-    """Returns (mean_loss, macro_auc, per_label_aucs) with per_label_aucs[i] = AUC for label i or np.nan if no positives."""
+    """Returns (mean_loss, macro_auc, per_label_aucs) with per_label_aucs[i] = AUC or nan."""
     model.eval()
     total_loss = 0
     all_probs, all_labels = [], []
@@ -637,16 +589,50 @@ def eval_epoch(model, loader, criterion, device):
 
     probs = np.concatenate(all_probs)
     labels = np.concatenate(all_labels)
-    n_labels = labels.shape[1]
-    per_label_aucs = []
-    for i in range(n_labels):
-        if labels[:, i].sum() > 0:
-            per_label_aucs.append(roc_auc_score(labels[:, i], probs[:, i]))
-        else:
-            per_label_aucs.append(np.nan)
+    per_label_aucs = [
+        roc_auc_score(labels[:, i], probs[:, i]) if labels[:, i].sum() > 0 else np.nan
+        for i in range(labels.shape[1])
+    ]
     valid_aucs = [a for a in per_label_aucs if not np.isnan(a)]
     macro_auc = float(np.mean(valid_aucs)) if valid_aucs else 0.0
     return total_loss / len(loader), macro_auc, per_label_aucs
+
+
+def _train_cardiotwin_model(
+    model, train_loader, val_loader, test_loader,
+    params: dict, out_path: str, device
+) -> tuple:
+    """Train CardioTwinED with early stopping. Returns (model, test_auc, per_label_aucs)."""
+    # Weighted BCE (re-enable to up-weight rare labels):
+    # criterion = nn.BCEWithLogitsLoss(
+    #     pos_weight=compute_class_weights(train_loader.dataset.labels).to(device)
+    # )
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"]
+    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params["epochs"])
+
+    best_val_auc = 0.0
+    best_model_pt = os.path.join(out_path, "best_cardio_digital_twin.pt")
+
+    for epoch in range(params["epochs"]):
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
+                                 grad_clip_norm=params["grad_clip_norm"])
+        val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
+        scheduler.step()
+        improved = val_auc > best_val_auc
+        if improved:
+            best_val_auc = val_auc
+            torch.save(model.state_dict(), best_model_pt)
+        log.info("Epoch %3d/%d | train=%.4f val=%.4f auc=%.4f%s",
+                 epoch + 1, params["epochs"], train_loss, val_loss, val_auc,
+                 " ✓" if improved else "")
+
+    model.load_state_dict(torch.load(best_model_pt, map_location=device))
+    _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
+    log.info("Best val_auc=%.4f | test_auc=%.4f", best_val_auc, test_auc)
+    return model, test_auc, per_label_aucs
 
 
 # =============================================================================
@@ -670,12 +656,12 @@ def run_ablations(model, test_loader, criterion, device) -> dict:
         model.eval()
         all_probs, all_labels = [], []
         for batch in test_loader:
-            vf = batch["vital_feats"].to(device)
+            vf   = batch["vital_feats"].to(device)
             vseq = batch["vital_seq"].to(device)
             vlen = batch["vital_lengths"].to(device)
-            ecg = batch["ecg"].to(device)
-            ehr = batch["ehr"].to(device)
-            msk = batch["ecg_mask"].to(device)
+            ecg  = batch["ecg"].to(device)
+            ehr  = batch["ehr"].to(device)
+            msk  = batch["ecg_mask"].to(device)
             if cfg["zero_vital"]:
                 vf = torch.zeros_like(vf)
                 vseq = torch.zeros_like(vseq)
@@ -802,70 +788,289 @@ def plot_trajectory(trajectory, patient_id, label_names=LABEL_COLS, save_path=No
 
 
 # =============================================================================
-# 9. EVALUATION PLOTS
+# 9. EVALUATION
 # =============================================================================
 
-def plot_evaluation(y_true, y_pred_probs, label_names, out_path):
-    """ROC, PR curves, and aggregated confusion matrix."""
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    valid = [l for l in label_names if len(np.unique(y_true[:, list(label_names).index(l)])) > 1]
+def evaluate_and_visualize_cardiotwin(
+    model, test_loader, label_cols_present, out_path: str,
+    model_name: str = "cardio_digital_twin", device=None
+) -> pd.DataFrame:
+    """
+    Evaluate CardioTwinED and produce:
+      1. ROC curves PNG
+      2. Precision-Recall curves PNG
+      3. Aggregated binary confusion matrix PNG
+      4. Label co-occurrence matrix PNG
+      5. Per-label results CSV (roc_auc, pr_auc, precision, recall, f1, accuracy)
+    """
+    from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    out_dir = Path(out_path) / model_name
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    for label in valid:
-        idx = list(label_names).index(label)
-        fpr, tpr, _ = roc_curve(y_true[:, idx], y_pred_probs[:, idx])
-        auc = roc_auc_score(y_true[:, idx], y_pred_probs[:, idx])
-        color = "#2E5090" if auc >= 0.95 else ("#6B46C1" if auc >= 0.85 else "#D32F2F")
-        axes[0].plot(fpr, tpr, linewidth=1.5, alpha=0.5, color=color)
-    axes[0].plot([0, 1], [0, 1], "k--", linewidth=2)
-    mean_auc = np.mean([
-        roc_auc_score(y_true[:, list(label_names).index(l)],
-                      y_pred_probs[:, list(label_names).index(l)]) for l in valid
-    ])
-    axes[0].set_title(f"ROC Curves\nMean AUC: {mean_auc:.3f}", fontsize=14)
-    axes[0].set_xlabel("False Positive Rate")
-    axes[0].set_ylabel("True Positive Rate")
-    axes[0].grid(True, alpha=0.3)
+    model.eval()
+    all_probs, all_labels = [], []
+    with torch.no_grad():
+        for batch in test_loader:
+            out = model(
+                batch["vital_feats"].to(device),
+                batch["vital_seq"].to(device),
+                batch["vital_lengths"].to(device),
+                batch["ecg"].to(device),
+                batch["ehr"].to(device),
+                batch["ecg_mask"].to(device),
+            )
+            all_probs.append(out["probs"].cpu().numpy())
+            all_labels.append(batch["labels"].numpy())
 
-    for label in valid:
-        idx = list(label_names).index(label)
-        prec, rec, _ = precision_recall_curve(y_true[:, idx], y_pred_probs[:, idx])
-        ap = average_precision_score(y_true[:, idx], y_pred_probs[:, idx])
-        color = "#2E5090" if ap >= 0.5 else ("#6B46C1" if ap >= 0.25 else "#D32F2F")
-        axes[1].plot(rec, prec, linewidth=1.5, alpha=0.5, color=color)
-    mean_ap = np.mean([
-        average_precision_score(y_true[:, list(label_names).index(l)],
-                                y_pred_probs[:, list(label_names).index(l)]) for l in valid
-    ])
-    axes[1].set_title(f"Precision-Recall Curves\nMean PR-AUC: {mean_ap:.3f}", fontsize=14)
-    axes[1].set_xlabel("Recall")
-    axes[1].set_ylabel("Precision")
-    axes[1].grid(True, alpha=0.3)
+    y_true = np.concatenate(all_labels)
+    y_pred = np.concatenate(all_probs)
+    y_pred_bin = (y_pred >= 0.5).astype(int)
 
-    y_pred_bin = (y_pred_probs >= 0.5).astype(int)
-    total_cm = sum(
-        confusion_matrix(y_true[:, list(label_names).index(l)],
-                         y_pred_bin[:, list(label_names).index(l)]) for l in valid
-    )
-    sns.heatmap(total_cm, annot=True, fmt=".0f", cmap="Blues", ax=axes[2],
-                xticklabels=["Negative", "Positive"],
-                yticklabels=["Negative", "Positive"], cbar=False)
-    axes[2].set_title(f"Aggregated Confusion Matrix\n(Sum Across {len(valid)} Labels)")
-    axes[2].set_xlabel("Predicted")
-    axes[2].set_ylabel("True")
+    valid_labels = [
+        l for l in label_cols_present
+        if len(np.unique(y_true[:, label_cols_present.index(l)])) > 1
+    ]
 
+    # --- Results CSV ---
+    results = []
+    for i, label in enumerate(label_cols_present):
+        yt = y_true[:, i]
+        yp = y_pred[:, i]
+        yb = y_pred_bin[:, i]
+        has_both = len(np.unique(yt)) > 1
+        results.append({
+            "target":      label,
+            "n_test_pos":  int(yt.sum()),
+            "pos_rate":    yt.mean(),
+            "roc_auc":     roc_auc_score(yt, yp) if has_both else np.nan,
+            "pr_auc":      average_precision_score(yt, yp) if has_both else np.nan,
+            "precision":   precision_score(yt, yb, zero_division=0),
+            "recall":      recall_score(yt, yb, zero_division=0),
+            "f1":          f1_score(yt, yb, zero_division=0),
+            "accuracy":    accuracy_score(yt, yb),
+        })
+
+    results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
+    results_df.to_csv(out_dir / f"{model_name}_results.csv", index=False)
+
+    # --- Overall results CSV ---
+    y_true_flat = y_true.ravel()
+    y_pred_bin_flat = y_pred_bin.ravel()
+    overall_df = pd.DataFrame([{
+        "mean_roc_auc":  results_df["roc_auc"].mean(),
+        "mean_pr_auc":   results_df["pr_auc"].mean(),
+        "accuracy":      accuracy_score(y_true_flat, y_pred_bin_flat),
+        "precision":     precision_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+        "recall":        recall_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+        "f1":            f1_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+    }])
+    overall_df.to_csv(out_dir / f"{model_name}_overall_results.csv", index=False)
+
+    # --- ROC curves ---
+    mean_auc = results_df["roc_auc"].mean()
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        fpr, tpr, _ = roc_curve(y_true[:, idx], y_pred[:, idx])
+        auc = roc_auc_score(y_true[:, idx], y_pred[:, idx])
+        color = "#2E5090" if auc >= 0.85 else ("#6B46C1" if auc >= 0.75 else "#D32F2F")
+        ax.plot(fpr, tpr, linewidth=1.5, alpha=0.5, color=color)
+    ax.plot([0, 1], [0, 1], "k--", linewidth=2)
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.text(0.98, 0.02, f"Mean AUC: {mean_auc:.3f}", transform=ax.transAxes,
+            ha="right", va="bottom", fontsize=11)
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.savefig(out_dir / f"{model_name}_roc_curves.png", dpi=300, bbox_inches="tight")
     plt.close()
 
+    # --- Precision-Recall curves ---
+    mean_ap = results_df["pr_auc"].mean()
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        prec, rec, _ = precision_recall_curve(y_true[:, idx], y_pred[:, idx])
+        ap = average_precision_score(y_true[:, idx], y_pred[:, idx])
+        color = "#2E5090" if ap >= 0.5 else ("#6B46C1" if ap >= 0.3 else "#D32F2F")
+        ax.plot(rec, prec, linewidth=1.5, alpha=0.5, color=color)
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.text(0.98, 0.98, f"Mean PR-AUC: {mean_ap:.3f}", transform=ax.transAxes,
+            ha="right", va="top", fontsize=11)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(out_dir / f"{model_name}_pr_curves.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # --- Aggregated binary confusion matrix ---
+    total_cm = np.zeros((2, 2))
+    for label in valid_labels:
+        idx = label_cols_present.index(label)
+        total_cm += confusion_matrix(y_true[:, idx], y_pred_bin[:, idx])
+    fig, ax = plt.subplots(figsize=(5, 4))
+    sns.heatmap(total_cm, annot=True, fmt=".0f", cmap="Blues", ax=ax,
+                xticklabels=["Negative", "Positive"],
+                yticklabels=["Negative", "Positive"], cbar=False)
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+    ax.text(0.5, -0.18, f"Sum across {len(valid_labels)} labels",
+            transform=ax.transAxes, ha="center", fontsize=9, color="gray")
+    plt.tight_layout()
+    plt.savefig(out_dir / f"{model_name}_confusion_matrix.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # --- Label co-occurrence matrix ---
+    # Rows = true positive stays for that label; columns = predicted positive rate among those stays
+    n_valid = len(valid_labels)
+    co_matrix = np.zeros((n_valid, n_valid))
+    for i, true_label in enumerate(valid_labels):
+        true_idx = label_cols_present.index(true_label)
+        positive_mask = y_true[:, true_idx] == 1
+        if positive_mask.sum() > 0:
+            for j, pred_label in enumerate(valid_labels):
+                pred_idx = label_cols_present.index(pred_label)
+                co_matrix[i, j] = y_pred_bin[positive_mask, pred_idx].sum()
+
+    fig_size = max(10, n_valid * 0.6)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.85))
+    im = ax.imshow(co_matrix, cmap="Greens", aspect="auto")
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Prediction Count", rotation=270, labelpad=20, fontsize=11)
+
+    short_names = [l.replace("_", " ") for l in valid_labels]
+    ax.set_xticks(np.arange(n_valid))
+    ax.set_yticks(np.arange(n_valid))
+    ax.set_xticklabels(short_names, rotation=90, ha="right", fontsize=9)
+    ax.set_yticklabels(short_names, fontsize=9)
+    ax.set_xlabel("Predicted Label", fontsize=12)
+    ax.set_ylabel("True Label", fontsize=12)
+
+    if n_valid <= 30:
+        vmax = co_matrix.max()
+        for i in range(n_valid):
+            for j in range(n_valid):
+                count = int(co_matrix[i, j])
+                if count > 0:
+                    text_color = "white" if co_matrix[i, j] > vmax / 2 else "black"
+                    ax.text(j, i, str(count), ha="center", va="center",
+                            color=text_color, fontsize=7)
+
+    plt.tight_layout()
+    plt.savefig(out_dir / f"{model_name}_cooccurrence_matrix.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    return results_df
+
 
 # =============================================================================
-# 9. MODULAR HELPER FUNCTIONS
+# 10. K-FOLD LOSS CURVES
 # =============================================================================
 
-def _load_and_prepare_cardiotwin(in_dir, config_path, pbar, steps) -> tuple:
-    """Load and prepare all data: filters, ECG embeddings, vitals, EHR features."""
+def plot_kfold_loss_curves_cardiotwin(
+    train_loader_fn, val_loader_fn, model_fn, label_cols_present,
+    params: dict, out_path: str, device, n_folds: int = 3,
+    model_name: str = "cardio_digital_twin"
+) -> dict:
+    """
+    Train CardioTwinED using K-fold cross-validation with early stopping.
+    Returns a dict with mean train/val loss arrays and best/stopped epoch info.
+    """
+    Path(out_path).mkdir(parents=True, exist_ok=True)
+
+    train_loss_folds = np.zeros((n_folds, params["epochs"]))
+    val_loss_folds = np.zeros((n_folds, params["epochs"]))
+    stopped_epochs = []
+
+    for fold_idx in range(n_folds):
+        train_loader = train_loader_fn(fold_idx)
+        val_loader = val_loader_fn(fold_idx)
+
+        model = model_fn()
+        # Weighted BCE (re-enable to up-weight rare labels):
+        # criterion = nn.BCEWithLogitsLoss(
+        #     pos_weight=compute_class_weights(train_loader.dataset.labels).to(device)
+        # )
+        criterion = nn.BCEWithLogitsLoss()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
+                                      weight_decay=params["weight_decay"])
+
+        best_val_loss = float("inf")
+        patience_counter = 0
+        stopped_at = params["epochs"]
+
+        for epoch in range(params["epochs"]):
+            train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
+                                     grad_clip_norm=params["grad_clip_norm"])
+            val_loss, _, _ = eval_epoch(model, val_loader, criterion, device)
+
+            train_loss_folds[fold_idx, epoch] = train_loss
+            val_loss_folds[fold_idx, epoch] = val_loss
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if patience_counter >= 10:
+                stopped_at = epoch + 1
+                train_loss_folds[fold_idx, epoch + 1:] = train_loss
+                val_loss_folds[fold_idx, epoch + 1:] = val_loss
+                break
+
+        stopped_epochs.append(stopped_at)
+
+    mean_train = train_loss_folds.mean(axis=0)
+    mean_val = val_loss_folds.mean(axis=0)
+    best_epoch = int(np.argmin(mean_val))
+    mean_stopped = int(np.mean(stopped_epochs))
+
+    epochs_range = np.arange(1, params["epochs"] + 1)
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for fold_idx in range(n_folds):
+        ax.plot(epochs_range, train_loss_folds[fold_idx], color="#2E5090", alpha=0.12, linewidth=0.8)
+        ax.plot(epochs_range, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.12, linewidth=0.8)
+
+    ax.plot(epochs_range, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
+    ax.plot(epochs_range, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
+    ax.axvline(best_epoch + 1, color="gray", linestyle="--", linewidth=1.5,
+               label=f"Best epoch: {best_epoch + 1}  (val={mean_val[best_epoch]:.4f})")
+
+    if mean_stopped < params["epochs"]:
+        ax.axvline(mean_stopped, color="#F57C00", linestyle=":", linewidth=1.5,
+                   label=f"Mean early stop: epoch {mean_stopped}")
+
+    ax.set_xlabel("Epoch", fontsize=12)
+    ax.set_ylabel("BCE Loss", fontsize=12)
+    ax.set_title(f"{model_name} — Train vs Val Loss\n{n_folds}-Fold CV · patience=10",
+                 fontsize=14, fontweight="bold")
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_curves.png"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    return {
+        "mean_train_loss": mean_train,
+        "mean_val_loss": mean_val,
+        "best_epoch": best_epoch,
+        "mean_stopped_epoch": mean_stopped,
+    }
+
+
+# =============================================================================
+# 11. PIPELINE HELPERS
+# =============================================================================
+
+def _load_and_prepare_data(in_dir, config_path, pbar, steps) -> tuple:
+    """Load raw data, filter, compute ECG intervals, extract embeddings, build model_df."""
     pbar.set_description(steps[0])
     config = load_config(config_path)
     ed_vitals, clinical_encounters, ecg_records = load_data_files(in_dir, config)
@@ -900,267 +1105,178 @@ def _load_and_prepare_cardiotwin(in_dir, config_path, pbar, steps) -> tuple:
     return config, ed_vitals, model_df, all_ecgs_embedded
 
 
-def _val_split(model_df, X_train, y_train, val_size=0.1, random_state=0) -> tuple:
-    """Carve a patient-aware validation split for early stopping."""
-    val_splitter = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=random_state)
-    train_groups = model_df.loc[y_train.index, "subject_id"].astype(int).values
-    tr_idx, val_idx = next(val_splitter.split(X_train, y_train, groups=train_groups))
+def _build_splits(model_df, test_size, val_size, random_state, val_random_state):
+    """Patient-level train/val/test split. Returns (train_df, val_df, test_df)."""
+    splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+    train_idx, test_idx = next(splitter.split(model_df, groups=model_df["subject_id"].astype(int)))
+
+    val_splitter = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=val_random_state)
+    rel_train_idx, rel_val_idx = next(
+        val_splitter.split(
+            model_df.iloc[train_idx],
+            groups=model_df.iloc[train_idx]["subject_id"].astype(int),
+        )
+    )
+
+    train_df = model_df.iloc[train_idx].iloc[rel_train_idx].reset_index(drop=True)
+    val_df = model_df.iloc[train_idx].iloc[rel_val_idx].reset_index(drop=True)
+    test_df = model_df.iloc[test_idx].reset_index(drop=True)
+
+    tv_overlap = set(train_df["subject_id"]) & set(val_df["subject_id"])
+    tt_overlap = set(train_df["subject_id"]) & set(test_df["subject_id"])
+    if tv_overlap or tt_overlap:
+        log.warning("Patient leakage — train/val: %d  train/test: %d",
+                    len(tv_overlap), len(tt_overlap))
+
+    return train_df, val_df, test_df
+
+
+def _build_vitals(ed_vitals, train_df, val_df, test_df):
+    """
+    Fit vital feature and sequence scalers on train, transform all splits.
+    Returns (train_feat, val_feat, test_feat, train_seqs, val_seqs, test_seqs,
+             vital_scaler, seq_scaler, actual_vital_dim, actual_vital_stat).
+    """
+    def sids(df):
+        return set(df["subject_id"])
+
+    train_sids, val_sids, test_sids = sids(train_df), sids(val_df), sids(test_df)
+
+    train_feat, vital_scaler = create_vital_features(
+        ed_vitals[ed_vitals["subject_id"].isin(train_sids)], fit_scaler=True
+    )
+    val_feat, _ = create_vital_features(
+        ed_vitals[ed_vitals["subject_id"].isin(val_sids)], scaler=vital_scaler
+    )
+    test_feat, _ = create_vital_features(
+        ed_vitals[ed_vitals["subject_id"].isin(test_sids)], scaler=vital_scaler
+    )
+
+    train_seqs, seq_scaler = create_vital_sequences(
+        ed_vitals[ed_vitals["subject_id"].isin(train_sids)], fit_scaler=True
+    )
+    val_seqs, _ = create_vital_sequences(
+        ed_vitals[ed_vitals["subject_id"].isin(val_sids)], vital_scaler=seq_scaler
+    )
+    test_seqs, _ = create_vital_sequences(
+        ed_vitals[ed_vitals["subject_id"].isin(test_sids)], vital_scaler=seq_scaler
+    )
+
+    actual_vital_dim = len([c for c in VITAL_COLS if c in ed_vitals.columns])
+    actual_vital_stat = len([c for c in train_feat.columns if c.startswith("vf_")])
+
+    return (train_feat, val_feat, test_feat,
+            train_seqs, val_seqs, test_seqs,
+            vital_scaler, seq_scaler,
+            actual_vital_dim, actual_vital_stat)
+
+
+def _filter_to_vitals(ids: list, vital_feat_df: pd.DataFrame) -> list:
+    """Drop stays that have no vitals coverage."""
+    valid = set(zip(vital_feat_df["subject_id"].astype(int), vital_feat_df["ed_stay_id"]))
+    return [(sid, stay) for sid, stay in ids if (sid, stay) in valid]
+
+
+def _build_ehr(model_df, train_ids, val_ids, test_ids):
+    """Fit EHR scaler on train, transform all splits.
+    Returns (train_ehr, val_ehr, test_ehr, scaler, ehr_dim, feat_names)."""
+    train_ehr, ehr_scaler, ehr_feat_names = prepare_ehr_features(model_df, train_ids, fit_scaler=True)
+    val_ehr, _, _ = prepare_ehr_features(model_df, val_ids, scaler=ehr_scaler)
+    test_ehr, _, _ = prepare_ehr_features(model_df, test_ids, scaler=ehr_scaler)
+    return train_ehr, val_ehr, test_ehr, ehr_scaler, train_ehr.shape[1], ehr_feat_names
+
+
+def _build_loaders(
+    train_ids, val_ids, test_ids,
+    train_feat, val_feat, test_feat,
+    train_ehr, val_ehr, test_ehr,
+    train_labels, val_labels, test_labels,
+    train_seqs, val_seqs, test_seqs,
+    ecg_dict, actual_vital_dim, ecg_fm_dim,
+    batch_size, num_workers, max_n, max_t,
+):
+    """Construct train/val/test DataLoaders."""
+    collate = partial(collate_fn, max_N=max_n, max_T=max_t, ecg_fm_dim=ecg_fm_dim)
+
+    def make_loader(ids, vf, ehr, labels, seqs, shuffle):
+        return DataLoader(
+            CardioEDDataset(ids, vf, ecg_dict, ehr, labels,
+                            vital_sequences=seqs, vital_dim=actual_vital_dim, ecg_fm_dim=ecg_fm_dim),
+            batch_size=batch_size, shuffle=shuffle, collate_fn=collate,
+            num_workers=num_workers, pin_memory=True,
+        )
+
     return (
-        X_train.iloc[tr_idx], y_train.iloc[tr_idx],
-        X_train.iloc[val_idx], y_train.iloc[val_idx],
+        make_loader(train_ids, train_feat, train_ehr, train_labels, train_seqs, True),
+        make_loader(val_ids,   val_feat,   val_ehr,   val_labels,   val_seqs,   False),
+        make_loader(test_ids,  test_feat,  test_ehr,  test_labels,  test_seqs,  False),
     )
 
 
-def _train_cardiotwin_model(
-    model, train_loader, val_loader, test_loader,
-    params: dict, out_path: str, device, pbar=None
-) -> tuple:
-    """Train CardioTwinED with early stopping. Returns (model, test_auc, per_label_aucs)."""
-    criterion = nn.BCEWithLogitsLoss(pos_weight=compute_class_weights(
-        train_loader.dataset.labels).to(device))
-    optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
-                                  weight_decay=params["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params["epochs"])
-
-    best_val_auc = 0.0
-    best_model_pt = os.path.join(out_path, "best_cardiotwin.pt")
-
-    for epoch in range(params["epochs"]):
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
-                                grad_clip_norm=params["grad_clip_norm"])
-        val_loss, val_auc, _ = eval_epoch(model, val_loader, criterion, device)
-        scheduler.step()
-        improved = val_auc > best_val_auc
-        if improved:
-            best_val_auc = val_auc
-            torch.save(model.state_dict(), best_model_pt)
-        print(f"  Epoch {epoch+1:3d}/{params['epochs']} | "
-              f"train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | "
-              f"val_auc={val_auc:.4f}{' ✓' if improved else ''}")
-
-    model.load_state_dict(torch.load(best_model_pt, map_location=device))
-    _, test_auc, per_label_aucs = eval_epoch(model, test_loader, criterion, device)
-    print(f"\n[Train] Best val_auc={best_val_auc:.4f} | test_auc={test_auc:.4f}")
-    valid_aucs = [(LABEL_COLS[i], auc) for i, auc in enumerate(per_label_aucs) if not np.isnan(auc)]
-    valid_aucs.sort(key=lambda x: x[1], reverse=True)
-    print(f"[Train] Per-label AUC (non-nan): {valid_aucs}")
-    return model, test_auc, per_label_aucs
+def _build_model(actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
+                 enc_dim, hidden_dim, lstm_hidden, dropout, n_labels, device):
+    """Instantiate and initialize CardioTwinED."""
+    model = CardioTwinED(
+        vital_stat=actual_vital_stat,
+        vital_dim=actual_vital_dim,
+        ehr_dim=ehr_dim,
+        ecg_emb_dim=ecg_fm_dim,
+        enc_dim=enc_dim,
+        hidden_dim=hidden_dim,
+        lstm_hidden=lstm_hidden,
+        dropout=dropout,
+        n_labels=n_labels,
+    ).to(device)
+    model.set_ehr_dim(ehr_dim, device=device)
+    return model
 
 
-def plot_kfold_loss_curves_cardiotwin(
-    train_loader_fn, val_loader_fn, model_fn, label_cols_present,
-    params: dict, out_path: str, device, n_folds: int = 3,
-    model_name: str = "cardiotwin"
-) -> dict:
-    """
-    Train CardioTwinED using K-fold cross-validation with early stopping.
-    Returns a plot of mean train/val loss across folds.
-    """
-    Path(out_path).mkdir(parents=True, exist_ok=True)
-    
-    train_loss_folds = np.zeros((n_folds, params["epochs"]))
-    val_loss_folds = np.zeros((n_folds, params["epochs"]))
-    stopped_epochs = []
+def _run_trajectories(model, test_ids, test_seqs, test_ehr, ecg_dict,
+                      label_cols_present, vital_scaler, device,
+                      out_path, max_t, max_n, ecg_fm_dim,
+                      n_samples, min_steps):
+    """Generate and save digital twin trajectory plots for sample test patients."""
+    candidates = [
+        (sid, stay_id) for sid, stay_id in test_ids
+        if test_seqs.get((sid, stay_id)) is not None
+        and len(test_seqs[(sid, stay_id)]) >= min_steps
+    ][:n_samples]
 
-    for fold_idx in range(n_folds):
-        train_loader = train_loader_fn(fold_idx)
-        val_loader = val_loader_fn(fold_idx)
-        
-        model = model_fn()
-        criterion = nn.BCEWithLogitsLoss(pos_weight=compute_class_weights(
-            train_loader.dataset.labels).to(device))
-        optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
-                                      weight_decay=params["weight_decay"])
+    # Bug 6: build O(1) lookup — test_ids.index() is O(n) and returns wrong row
+    # if test_ids was filtered after test_ehr was built
+    test_id_to_row = {(sid, stay): i for i, (sid, stay) in enumerate(test_ids)}
 
-        best_val_loss = float("inf")
-        patience_counter = 0
-        stopped_at = params["epochs"]
-
-        for epoch in range(params["epochs"]):
-            train_loss = train_epoch(model, train_loader, optimizer, criterion, device,
-                                    grad_clip_norm=params["grad_clip_norm"])
-            val_loss, _, _ = eval_epoch(model, val_loader, criterion, device)
-            
-            train_loss_folds[fold_idx, epoch] = train_loss
-            val_loss_folds[fold_idx, epoch] = val_loss
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
-            else:
-                patience_counter += 1
-
-            if patience_counter >= 10:  # early stopping patience
-                stopped_at = epoch + 1
-                train_loss_folds[fold_idx, epoch + 1:] = train_loss
-                val_loss_folds[fold_idx, epoch + 1:] = val_loss
-                break
-
-        stopped_epochs.append(stopped_at)
-
-    mean_train = train_loss_folds.mean(axis=0)
-    mean_val = val_loss_folds.mean(axis=0)
-    best_epoch = int(np.argmin(mean_val))
-    mean_stopped = int(np.mean(stopped_epochs))
-
-    # Plot
-    epochs_range = np.arange(1, params["epochs"] + 1)
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    for fold_idx in range(n_folds):
-        ax.plot(epochs_range, train_loss_folds[fold_idx], color="#2E5090", alpha=0.12, linewidth=0.8)
-        ax.plot(epochs_range, val_loss_folds[fold_idx], color="#D32F2F", alpha=0.12, linewidth=0.8)
-
-    ax.plot(epochs_range, mean_train, color="#2E5090", linewidth=2.5, label="Train loss (mean)")
-    ax.plot(epochs_range, mean_val, color="#D32F2F", linewidth=2.5, label="Val loss (mean)")
-
-    ax.axvline(best_epoch + 1, color="gray", linestyle="--", linewidth=1.5,
-               label=f"Best epoch: {best_epoch + 1}  (val={mean_val[best_epoch]:.4f})")
-
-    if mean_stopped < params["epochs"]:
-        ax.axvline(mean_stopped, color="#F57C00", linestyle=":", linewidth=1.5,
-                   label=f"Mean early stop: epoch {mean_stopped}")
-
-    ax.set_xlabel("Epoch", fontsize=12)
-    ax.set_ylabel("BCE Loss", fontsize=12)
-    ax.set_title(f"{model_name} — Train vs Val Loss\n{n_folds}-Fold CV · patience=10",
-                 fontsize=14, fontweight="bold")
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    plot_path = Path(out_path) / model_name / f"{model_name}_kfold_loss_curves.png"
-    plot_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
-    plt.close()
-
-    return {
-        "mean_train_loss": mean_train,
-        "mean_val_loss": mean_val,
-        "best_epoch": best_epoch,
-        "mean_stopped_epoch": mean_stopped,
-    }
-
-
-def evaluate_and_visualize_cardiotwin(
-    model, test_loader, label_cols_present, out_path: str,
-    model_name: str = "cardiotwin", device=None
-) -> pd.DataFrame:
-    """
-    Evaluate CardioTwinED and produce:
-      1. ROC + PR curves + aggregated confusion matrix
-      2. Per-label results CSV
-    """
-    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    Path(out_path).mkdir(parents=True, exist_ok=True)
-
-    model.eval()
-    all_probs, all_labels = [], []
-    with torch.no_grad():
-        for batch in test_loader:
-            out = model(
-                batch["vital_feats"].to(device),
-                batch["vital_seq"].to(device),
-                batch["vital_lengths"].to(device),
-                batch["ecg"].to(device),
-                batch["ehr"].to(device),
-                batch["ecg_mask"].to(device),
-            )
-            all_probs.append(out["probs"].cpu().numpy())
-            all_labels.append(batch["labels"].numpy())
-
-    y_true = np.concatenate(all_labels)
-    y_pred = np.concatenate(all_probs)
-
-    # Compute per-label AUCs
-    results = []
-    for i, label in enumerate(label_cols_present):
-        n_pos = y_true[:, i].sum()
-        if len(np.unique(y_true[:, i])) > 1:
-            auc = roc_auc_score(y_true[:, i], y_pred[:, i])
-            ap = average_precision_score(y_true[:, i], y_pred[:, i])
-        else:
-            auc = ap = np.nan
-        results.append({
-            "target": label,
-            "n_test_pos": int(n_pos),
-            "pos_rate": y_true[:, i].mean(),
-            "roc_auc": auc,
-            "pr_auc": ap,
-        })
-
-    results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
-    valid_labels = [l for l in label_cols_present if len(np.unique(y_true[:, label_cols_present.index(l)])) > 1]
-
-    # ROC + PR + Confusion Matrix
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
-
-    for label in valid_labels:
-        idx = label_cols_present.index(label)
-        fpr, tpr, _ = roc_curve(y_true[:, idx], y_pred[:, idx])
-        auc = roc_auc_score(y_true[:, idx], y_pred[:, idx])
-        color = "#2E5090" if auc >= 0.85 else ("#6B46C1" if auc >= 0.75 else "#D32F2F")
-        axes[0].plot(fpr, tpr, linewidth=1.5, alpha=0.5, color=color)
-
-    axes[0].plot([0, 1], [0, 1], "k--", linewidth=2)
-    mean_auc = results_df["roc_auc"].mean()
-    axes[0].set_title(f"ROC Curves\nMean AUC: {mean_auc:.3f}", fontsize=14)
-    axes[0].set_xlabel("False Positive Rate")
-    axes[0].set_ylabel("True Positive Rate")
-    axes[0].grid(True, alpha=0.3)
-
-    for label in valid_labels:
-        idx = label_cols_present.index(label)
-        prec, rec, _ = precision_recall_curve(y_true[:, idx], y_pred[:, idx])
-        ap = average_precision_score(y_true[:, idx], y_pred[:, idx])
-        color = "#2E5090" if ap >= 0.5 else ("#6B46C1" if ap >= 0.3 else "#D32F2F")
-        axes[1].plot(rec, prec, linewidth=1.5, alpha=0.5, color=color)
-
-    mean_ap = results_df["pr_auc"].mean()
-    axes[1].set_title(f"Precision-Recall Curves\nMean PR-AUC: {mean_ap:.3f}", fontsize=14)
-    axes[1].set_xlabel("Recall")
-    axes[1].set_ylabel("Precision")
-    axes[1].grid(True, alpha=0.3)
-
-    y_pred_bin = (y_pred >= 0.5).astype(int)
-    total_cm = np.zeros((2, 2))
-    for label in valid_labels:
-        idx = label_cols_present.index(label)
-        total_cm += confusion_matrix(y_true[:, idx], y_pred_bin[:, idx])
-
-    sns.heatmap(total_cm, annot=True, fmt=".0f", cmap="Blues", ax=axes[2],
-                xticklabels=["Negative", "Positive"],
-                yticklabels=["Negative", "Positive"], cbar=False)
-    axes[2].set_title(f"Aggregated Confusion Matrix\n(Sum Across {len(valid_labels)} Labels)")
-    axes[2].set_xlabel("Predicted")
-    axes[2].set_ylabel("True")
-
-    plt.tight_layout()
-    fig_path = Path(out_path) / model_name / f"{model_name}_evaluation_plots.png"
-    fig_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(fig_path, dpi=300, bbox_inches="tight")
-    plt.close()
-
-    csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
-    results_df.to_csv(csv_path, index=False)
-
-    return results_df
+    for sid, stay_id in candidates:
+        row_idx = test_id_to_row.get((sid, stay_id))
+        if row_idx is None:
+            log.warning("(%s, %s) not in test_id_to_row — skipping trajectory", sid, stay_id)
+            continue
+        raw_seq = test_seqs[(sid, stay_id)]
+        ecg_embs = ecg_dict.get((int(sid), stay_id), np.zeros((1, ecg_fm_dim), dtype=np.float32))
+        traj = simulate_trajectory(
+            model, raw_seq, ecg_embs, test_ehr[row_idx], device,
+            vital_stat_scaler=vital_scaler, max_t=max_t, max_n=max_n, ecg_fm_dim=ecg_fm_dim,
+        )
+        plot_trajectory(
+            traj, patient_id=sid, label_names=label_cols_present,
+            save_path=os.path.join(out_path, f"cardio_digital_twin_baseline/trajectory_{sid}_{stay_id}.png"),
+        )
 
 
 # =============================================================================
-# 10. MAIN PIPELINE
+# 12. MAIN PIPELINE
 # =============================================================================
 
 def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     """
     Full CardioTwin pipeline: ECG-FM + vitals + EHR with gated fusion.
-    
+
     Features:
       - Multimodal fusion (vitals + ECG + EHR)
       - K-fold cross-validation with loss curves
       - Comprehensive evaluation (ROC, PR, confusion matrix)
       - Digital twin trajectory simulation
-    
+
     Same signature as run_mlp_*_pipeline for consistency.
     """
     steps = [
@@ -1186,10 +1302,11 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     try:
         config = load_config(config_path)
         in_dir = str(Path(in_dir).resolve()) if in_dir else str(_REPO_ROOT / config["paths"]["in_dir"])
-        out_path = str(Path(out_path).resolve()) if out_path else str(_REPO_ROOT / config["paths"].get("out_dir", "data/model_results/cardiotwin"))
+        out_path = str(Path(out_path).resolve()) if out_path else str(
+            _REPO_ROOT / config["paths"].get("out_dir", "/model_results/")
+        )
         Path(out_path).mkdir(parents=True, exist_ok=True)
 
-        # Extract configuration parameters
         pl = config.get("pipeline", {})
         max_t = pl.get("max_t", MAX_T)
         max_n = pl.get("max_n", MAX_N)
@@ -1209,252 +1326,112 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         ecg_fm_dim = mdl.get("ecg_fm_dim", ECG_FM_DIM)
 
         trn = config.get("training", {})
-        batch_size = trn.get("batch_size", BATCH_SIZE)
-        lr = trn.get("learning_rate", LR)
-        weight_decay = trn.get("weight_decay", 1e-4)
-        epochs = trn.get("epochs", EPOCHS)
-        grad_clip_norm = trn.get("grad_clip_norm", 1.0)
-
         params = {
-            "batch_size": batch_size,
-            "learning_rate": lr,
-            "weight_decay": weight_decay,
-            "epochs": epochs,
-            "grad_clip_norm": grad_clip_norm,
+            "batch_size": trn.get("batch_size", BATCH_SIZE),
+            "learning_rate": trn.get("learning_rate", LR),
+            "weight_decay": trn.get("weight_decay", 1e-4),
+            "epochs": trn.get("epochs", EPOCHS),
+            "grad_clip_norm": trn.get("grad_clip_norm", 1.0),
         }
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load and prepare data
-        config, ed_vitals, model_df, all_ecgs_embedded = _load_and_prepare_cardiotwin(
+        # Steps 1-6: load raw data
+        config, ed_vitals, model_df, all_ecgs_embedded = _load_and_prepare_data(
             in_dir, config_path, pbar, steps
         )
 
-        print(f"\n{'='*60}")
-        print(f"[Pipeline] Data loaded")
-        print(f"  model_df:          {model_df.shape}")
-        print(f"  ed_vitals:         {ed_vitals.shape}")
-        print(f"  ecgs embedded:     {all_ecgs_embedded.shape}")
-        label_cols_check = [c for c in LABEL_COLS if c in model_df.columns]
-        print(f"  label cols in model_df: {len(label_cols_check)}/17 — "
-              + (f"{label_cols_check}" if len(label_cols_check) <= 5
-                 else f"{label_cols_check[:5]}..."))
-        if len(label_cols_check) == 0:
-            raise ValueError("CRITICAL: No label columns in model_df. Check create_model_df().")
-        pos_counts = model_df[label_cols_check].sum()
-        print(f"  positive label counts:\n{pos_counts.to_string()}")
-        print(f"{'='*60}")
+        label_cols_present = [c for c in LABEL_COLS if c in model_df.columns]
+        if not label_cols_present:
+            raise ValueError("No label columns in model_df — check create_model_df().")
 
-        # Patient-level split
-        splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
-        train_idx, test_idx = next(splitter.split(model_df, groups=model_df["subject_id"].astype(int)))
-        val_splitter = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=val_random_state)
-        rel_train_idx, rel_val_idx = next(
-            val_splitter.split(model_df.iloc[train_idx],
-                               groups=model_df.iloc[train_idx]["subject_id"].astype(int))
+        # Step 7: splits + vitals
+        train_df, val_df, test_df = _build_splits(
+            model_df, test_size, val_size, random_state, val_random_state
         )
-        train_df = model_df.iloc[train_idx].iloc[rel_train_idx].reset_index(drop=True)
-        val_df = model_df.iloc[train_idx].iloc[rel_val_idx].reset_index(drop=True)
-        test_df = model_df.iloc[test_idx].reset_index(drop=True)
 
         def get_ids(df):
             return list(zip(df["subject_id"].astype(int), df["ed_stay_id"]))
 
-        train_ids = get_ids(train_df)
-        val_ids = get_ids(val_df)
-        test_ids = get_ids(test_df)
-
-        print(f"\n[Pipeline] Patient-level split")
-        print(f"  train: {len(train_df)} stays ({train_df['subject_id'].nunique()} patients)")
-        print(f"  val:   {len(val_df)} stays ({val_df['subject_id'].nunique()} patients)")
-        print(f"  test:  {len(test_df)} stays ({test_df['subject_id'].nunique()} patients)")
-        # Check for patient leakage across splits
-        train_pats = set(train_df["subject_id"])
-        val_pats   = set(val_df["subject_id"])
-        test_pats  = set(test_df["subject_id"])
-        tv_overlap = train_pats & val_pats
-        tt_overlap = train_pats & test_pats
-        if tv_overlap or tt_overlap:
-            print(f"  WARNING: patient overlap — train/val:{len(tv_overlap)} train/test:{len(tt_overlap)}")
-        else:
-            print(f"  ✓ No patient leakage across splits")
-
-        label_cols_present = [c for c in LABEL_COLS if c in model_df.columns]
         id_label_cols = ["subject_id", "ed_stay_id"] + label_cols_present
         train_labels = train_df[id_label_cols]
         val_labels = val_df[id_label_cols]
         test_labels = test_df[id_label_cols]
 
-        print(f"\n[Pipeline] Labels")
-        print(f"  label_cols_present: {len(label_cols_present)}/17")
-        if label_cols_present:
-            print(f"  train positives per label:\n{train_labels[label_cols_present].sum().to_string()}")
-
         pbar.set_description(steps[6])
-        train_sids = set(train_df["subject_id"])
-        val_sids = set(val_df["subject_id"])
-        test_sids = set(test_df["subject_id"])
+        (train_feat, val_feat, test_feat,
+         train_seqs, val_seqs, test_seqs,
+         vital_scaler, _, actual_vital_dim, actual_vital_stat) = _build_vitals(
+            ed_vitals, train_df, val_df, test_df
+        )
 
-        train_vital_feat, vital_scaler = create_vital_features(
-            ed_vitals[ed_vitals["subject_id"].isin(train_sids)], fit_scaler=True)
-        val_vital_feat, _ = create_vital_features(
-            ed_vitals[ed_vitals["subject_id"].isin(val_sids)], scaler=vital_scaler)
-        test_vital_feat, _ = create_vital_features(
-            ed_vitals[ed_vitals["subject_id"].isin(test_sids)], scaler=vital_scaler)
-
-        train_seqs, seq_scaler = create_vital_sequences(
-            ed_vitals[ed_vitals["subject_id"].isin(train_sids)], fit_scaler=True)
-        val_seqs, _ = create_vital_sequences(
-            ed_vitals[ed_vitals["subject_id"].isin(val_sids)], vital_scaler=seq_scaler)
-        test_seqs, _ = create_vital_sequences(
-            ed_vitals[ed_vitals["subject_id"].isin(test_sids)], vital_scaler=seq_scaler)
-
-        actual_vital_dim = len([c for c in VITAL_COLS if c in ed_vitals.columns])
-        actual_vital_stat = len([c for c in train_vital_feat.columns if c.startswith("vf_")])
+        train_ids = _filter_to_vitals(get_ids(train_df), train_feat)
+        val_ids = _filter_to_vitals(get_ids(val_df), val_feat)
+        test_ids = _filter_to_vitals(get_ids(test_df), test_feat)
         pbar.update(1)
 
-        # Filter IDs to those with vitals coverage
-        def filter_to_vitals(ids, vital_feat_df):
-            valid = set(zip(vital_feat_df["subject_id"].astype(int), vital_feat_df["ed_stay_id"]))
-            filtered = [(sid, stay) for sid, stay in ids if (sid, stay) in valid]
-            return filtered
-
-        before = len(train_ids), len(val_ids), len(test_ids)
-        train_ids = filter_to_vitals(train_ids, train_vital_feat)
-        val_ids   = filter_to_vitals(val_ids,   val_vital_feat)
-        test_ids  = filter_to_vitals(test_ids,  test_vital_feat)
-        after = len(train_ids), len(val_ids), len(test_ids)
-        print(f"\n[Pipeline] Vitals filter")
-        print(f"  vital_dim={actual_vital_dim} stat_features={actual_vital_stat}")
-        print(f"  train: {before[0]} -> {after[0]} stays retained")
-        print(f"  val:   {before[1]} -> {after[1]} stays retained")
-        print(f"  test:  {before[2]} -> {after[2]} stays retained")
-        dropped = sum(b - a for b, a in zip(before, after))
-        if dropped > 0:
-            print(f"  WARNING: {dropped} stays dropped (no vitals data)")
-
+        # Step 8: EHR
         pbar.set_description(steps[7])
-        train_ehr, ehr_scaler, ehr_feat_names = prepare_ehr_features(model_df, train_ids, fit_scaler=True)
-        val_ehr, _, _ = prepare_ehr_features(model_df, val_ids, scaler=ehr_scaler)
-        test_ehr, _, _ = prepare_ehr_features(model_df, test_ids, scaler=ehr_scaler)
-        ehr_dim = train_ehr.shape[1]
-        print(f"\n[Pipeline] EHR features: ehr_dim={ehr_dim}")
-        print(f"  train_ehr={train_ehr.shape} val_ehr={val_ehr.shape} test_ehr={test_ehr.shape}")
-        print(f"  EHR feature names ({len(ehr_feat_names)}):")
-        for i, name in enumerate(ehr_feat_names):
-            print(f"    {i:3d}: {name}")
+        train_ehr, val_ehr, test_ehr, _, ehr_dim, _ = _build_ehr(
+            model_df, train_ids, val_ids, test_ids
+        )
         pbar.update(1)
 
+        # Step 9: ECG + DataLoaders
         pbar.set_description(steps[8])
         ecg_dict = prepare_ecg(all_ecgs_embedded, max_n=max_n, ecg_fm_dim=ecg_fm_dim)
-        train_ecg_cov = sum(1 for sid, stay in train_ids if (int(sid), stay) in ecg_dict)
-        print(f"\n[Pipeline] ECG coverage in train: {train_ecg_cov}/{len(train_ids)} "
-              f"({100*train_ecg_cov/max(len(train_ids),1):.1f}%)")
-        collate = partial(collate_fn, max_N=max_n, max_T=max_t, ecg_fm_dim=ecg_fm_dim)
-
-        def make_loader(ids, vf, ehr, labels, seqs, shuffle):
-            return DataLoader(
-                CardioEDDataset(ids, vf, ecg_dict, ehr, labels,
-                                vital_sequences=seqs, vital_dim=actual_vital_dim, ecg_fm_dim=ecg_fm_dim),
-                batch_size=batch_size, shuffle=shuffle, collate_fn=collate,
-                num_workers=num_workers, pin_memory=True,
-            )
-
-        train_loader = make_loader(train_ids, train_vital_feat, train_ehr, train_labels, train_seqs, True)
-        val_loader = make_loader(val_ids, val_vital_feat, val_ehr, val_labels, val_seqs, False)
-        test_loader = make_loader(test_ids, test_vital_feat, test_ehr, test_labels, test_seqs, False)
+        train_loader, val_loader, test_loader = _build_loaders(
+            train_ids, val_ids, test_ids,
+            train_feat, val_feat, test_feat,
+            train_ehr, val_ehr, test_ehr,
+            train_labels, val_labels, test_labels,
+            train_seqs, val_seqs, test_seqs,
+            ecg_dict, actual_vital_dim, ecg_fm_dim,
+            params["batch_size"], num_workers, max_n, max_t,
+        )
         pbar.update(1)
 
+        # Step 10: train
         pbar.set_description(steps[9])
-        model = CardioTwinED(
-            vital_stat=actual_vital_stat,
-            vital_dim=actual_vital_dim,
-            ehr_dim=ehr_dim,
-            ecg_emb_dim=ecg_fm_dim,
-            enc_dim=enc_dim,
-            hidden_dim=hidden_dim,
-            lstm_hidden=lstm_hidden,
-            dropout=dropout,
-            n_labels=len(label_cols_present),
-        ).to(device)
-        model.set_ehr_dim(ehr_dim, device=device)
-
-        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"\n[Pipeline] CardioTwinED built")
-        print(f"  device={device} | trainable_params={total_params:,}")
-        print(f"  vital_stat={actual_vital_stat} vital_dim={actual_vital_dim} "
-              f"ehr_dim={ehr_dim} ecg_emb_dim={ecg_fm_dim}")
-        print(f"  enc_dim={enc_dim} hidden_dim={hidden_dim} lstm_hidden={lstm_hidden} "
-              f"n_labels={len(label_cols_present)}")
-        print(f"\n[Pipeline] Starting training: epochs={epochs} batch={batch_size} lr={lr}")
-
-        model, test_auc, per_label_aucs = _train_cardiotwin_model(
+        model = _build_model(
+            actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
+            enc_dim, hidden_dim, lstm_hidden, dropout, len(label_cols_present), device,
+        )
+        model, _, _ = _train_cardiotwin_model(
             model, train_loader, val_loader, test_loader, params, out_path, device
         )
         pbar.update(1)
 
+        # Step 11: K-fold loss curves
         pbar.set_description(steps[10])
         plot_kfold_loss_curves_cardiotwin(
             lambda fold: train_loader,
             lambda fold: val_loader,
-            lambda: CardioTwinED(
-                vital_stat=actual_vital_stat,
-                vital_dim=actual_vital_dim,
-                ehr_dim=ehr_dim,
-                ecg_emb_dim=ecg_fm_dim,
-                enc_dim=enc_dim,
-                hidden_dim=hidden_dim,
-                lstm_hidden=lstm_hidden,
-                dropout=dropout,
-                n_labels=len(label_cols_present),
-            ).to(device),
-            label_cols_present,
-            params,
-            out_path,
-            device,
-            n_folds=3,
-            model_name="cardiotwin_baseline",
+            lambda: _build_model(
+                actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
+                enc_dim, hidden_dim, lstm_hidden, dropout, len(label_cols_present), device,
+            ),
+            label_cols_present, params, out_path, device,
+            n_folds=3, model_name="cardio_digital_twin_baseline",
         )
         pbar.update(1)
 
+        # Step 12: evaluate + trajectories
         pbar.set_description(steps[11])
         evaluate_and_visualize_cardiotwin(
             model, test_loader, label_cols_present, out_path,
-            model_name="cardiotwin_baseline", device=device
+            model_name="cardio_digital_twin_baseline", device=device,
         )
-
-        # Generate digital twin trajectories
-        candidates = [
-            (sid, stay_id) for sid, stay_id in test_ids
-            if test_seqs.get((sid, stay_id)) is not None
-            and len(test_seqs[(sid, stay_id)]) >= min_trajectory_steps
-        ][:n_trajectory_samples]
-
-        # Bug 6: test_ids.index() is O(n) per call and returns wrong row if test_ids
-        # was filtered after test_ehr was built. Build O(1) lookup once instead.
-        test_id_to_row = {(sid, stay): i for i, (sid, stay) in enumerate(test_ids)}
-
-        for sid, stay_id in candidates:
-            raw_seq = test_seqs[(sid, stay_id)]
-            ecg_embs = ecg_dict.get((int(sid), stay_id), np.zeros((1, ecg_fm_dim), dtype=np.float32))
-            row_idx = test_id_to_row.get((sid, stay_id))
-            if row_idx is None:
-                print(f"  WARNING: ({sid}, {stay_id}) not found in test_id_to_row, skipping trajectory")
-                continue
-            ehr_row = test_ehr[row_idx]
-            traj = simulate_trajectory(
-                model, raw_seq, ecg_embs, ehr_row, device,
-                vital_stat_scaler=vital_scaler,
-                max_t=max_t, max_n=max_n, ecg_fm_dim=ecg_fm_dim,
-            )
-            plot_trajectory(traj, patient_id=sid, label_names=label_cols_present,
-                            save_path=os.path.join(out_path, f"cardiotwin_baseline/trajectory_{sid}_{stay_id}.png"))
-
+        _run_trajectories(
+            model, test_ids, test_seqs, test_ehr, ecg_dict,
+            label_cols_present, vital_scaler, device, out_path,
+            max_t, max_n, ecg_fm_dim, n_trajectory_samples, min_trajectory_steps,
+        )
         pbar.close()
 
     except Exception as e:
         pbar.close()
         raise e
 
-    print("\n✓ CardioTwin pipeline complete!")
+    log.info("Cardio Digital Twin pipeline complete.")
     return None
