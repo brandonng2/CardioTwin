@@ -26,11 +26,11 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence
 from tqdm import tqdm
 
-from cardio_digital_twin_classes import (
+from src.models.cardio_digital_twin_classes import (
     CardioTwinED,
     VITAL_STAT, VITAL_DIM, ECG_FM_DIM, HIDDEN_DIM, LSTM_HIDDEN, DROPOUT, N_LABELS,
 )
-from cardio_digital_twin_utils import (
+from src.models.cardio_digital_twin_utils import (
     LABEL_COLS, VITAL_COLS,
     MAX_T, MAX_N, ENC_DIM, BATCH_SIZE, LR, EPOCHS,
     prepare_ecg,
