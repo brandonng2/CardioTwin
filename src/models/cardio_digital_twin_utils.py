@@ -37,7 +37,7 @@ from src.models.tabular_utils import (
     load_config,
     load_data_files,
 )
-from cardio_digital_twin_classes import CardioEDDataset, collate_fn
+from src.models.cardio_digital_twin_classes import CardioEDDataset, collate_fn
 
 log = logging.getLogger(__name__)
 
