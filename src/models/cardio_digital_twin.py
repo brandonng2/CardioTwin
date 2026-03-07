@@ -1303,7 +1303,7 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         config = load_config(config_path)
         in_dir = str(Path(in_dir).resolve()) if in_dir else str(_REPO_ROOT / config["paths"]["in_dir"])
         out_path = str(Path(out_path).resolve()) if out_path else str(
-            _REPO_ROOT / config["paths"].get("out_dir", "/model_results/")
+            _REPO_ROOT / config["paths"].get("out_dir", "model_results/")
         )
         Path(out_path).mkdir(parents=True, exist_ok=True)
 
