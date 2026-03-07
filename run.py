@@ -18,7 +18,7 @@ from src.models.mlp import (
     run_mlp_embedding_pipeline
 )
 
-from models.cardio_digital_twin import (
+from src.models.cardio_digital_twin import (
     run_cardiotwin_pipeline,
     # run_cardiotwin_ablation_pipeline,
     # CardioTwinConfig,
