@@ -39,6 +39,7 @@ from src.models.cardio_digital_twin_utils import (
     LABEL_COLS, VITAL_COLS,
     MAX_T, MAX_N, ENC_DIM, BATCH_SIZE, LR, EPOCHS,
     prepare_ecg,
+    build_weighted_sampler,
     train_cardiotwin_model,
     train_cardiotwin_model_bce,
     train_cardiotwin_model_bce_weighted,
@@ -238,13 +239,25 @@ VARIANTS = {
 # All three are active by default for the full ablation sweep.
 # Comment out entries to skip specific combinations.
 LOSS_TYPES = [
-    # "bce",
+    "bce",
     "bce_weighted",
     "focal",
 ]
 
+# --- Sampler variants to run for each (model, loss) combination ---
+# "none"     — standard shuffle=True DataLoader (default)
+# "weighted" — WeightedRandomSampler: rare-label stays appear more per epoch
+#
+# Stacking "weighted" sampler with "focal" loss gives the strongest signal
+# for very rare labels (e.g. pericardial_disease_tamponade, ami_stemi).
+# Each entry produces a separate run: {model_name}_{loss_type}_{sampler_type}/
+SAMPLER_TYPES = [
+    # "none",
+    "weighted",
+]
+
 _LOSS_TRAINERS = {
-    #  "bce":          train_cardiotwin_model_bce,
+    "bce":          train_cardiotwin_model_bce,
      "bce_weighted": train_cardiotwin_model_bce_weighted,
      "focal":        train_cardiotwin_model_focal,
 }
@@ -290,7 +303,7 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     """
     from src.models.tabular_utils import load_config
 
-    n_combos = len(VARIANTS) * len(LOSS_TYPES)
+    n_combos = len(VARIANTS) * len(LOSS_TYPES) * len(SAMPLER_TYPES)
     data_steps = [
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
@@ -303,9 +316,10 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         "Building ECG dict + datasets",
     ]
     train_steps = [
-        f"Training {mname} [{lt}]"
+        f"Training {mname} [{lt}] [sampler={st}]"
         for mname in VARIANTS
         for lt in LOSS_TYPES
+        for st in SAMPLER_TYPES
     ]
     steps = data_steps + train_steps
 
@@ -390,66 +404,77 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         )
         pbar.update(1)
 
-        # Step 9: ECG + DataLoaders
+        # Step 9: ECG dict (loaders are built per-run inside the combo loop below)
         pbar.set_description(data_steps[8])
         ecg_dict = prepare_ecg(all_ecgs_embedded, max_n=max_n, ecg_fm_dim=ecg_fm_dim)
-        train_loader, val_loader, test_loader = _build_loaders(
-            train_ids, val_ids, test_ids,
-            train_feat, val_feat, test_feat,
-            train_ehr, val_ehr, test_ehr,
-            train_labels, val_labels, test_labels,
-            train_seqs, val_seqs, test_seqs,
-            ecg_dict, actual_vital_dim, ecg_fm_dim,
-            params["batch_size"], num_workers, max_n, max_t,
-        )
         pbar.update(1)
 
-        # Train each variant x loss combination
+        # Train each variant x loss x sampler combination
         for model_name, (variant_cls, enc_dim) in VARIANTS.items():
             for loss_type in LOSS_TYPES:
-                run_name = f"{model_name}_{loss_type}"
-                pbar.set_description(f"Training {model_name} [{loss_type}]")
+                for sampler_type in SAMPLER_TYPES:
+                    run_name = f"{model_name}_{loss_type}_{sampler_type}"
+                    pbar.set_description(f"Training {model_name} [{loss_type}] [sampler={sampler_type}]")
 
-                model = _build_model(
-                    actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
-                    variant_cls, len(label_cols_present), device, lstm_hidden, dropout,
-                )
-                log.info(
-                    "Run: %s | enc_dim=%d | loss=%s | params=%s",
-                    run_name, enc_dim, loss_type,
-                    f"{sum(p.numel() for p in model.parameters() if p.requires_grad):,}",
-                )
+                    # Build sampler once per run (fitted on train labels only)
+                    train_sampler = (
+                        build_weighted_sampler(train_labels)
+                        if sampler_type == "weighted"
+                        else None
+                    )
 
-                trainer = _LOSS_TRAINERS[loss_type]
-                model, _, _ = trainer(
-                    model, train_loader, val_loader, test_loader,
-                    params, out_path, device, model_name=run_name,
-                )
+                    # Rebuild loaders with/without sampler for this run
+                    run_train_loader, run_val_loader, run_test_loader = _build_loaders(
+                        train_ids, val_ids, test_ids,
+                        train_feat, val_feat, test_feat,
+                        train_ehr, val_ehr, test_ehr,
+                        train_labels, val_labels, test_labels,
+                        train_seqs, val_seqs, test_seqs,
+                        ecg_dict, actual_vital_dim, ecg_fm_dim,
+                        params["batch_size"], num_workers, max_n, max_t,
+                        train_sampler=train_sampler,
+                    )
 
-                plot_kfold_loss_curves_cardiotwin(
-                    lambda fold: train_loader,
-                    lambda fold: val_loader,
-                    lambda: _build_model(
+                    model = _build_model(
                         actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
                         variant_cls, len(label_cols_present), device, lstm_hidden, dropout,
-                    ),
-                    label_cols_present, params, out_path, device,
-                    n_folds=3, model_name=run_name,
-                )
+                    )
+                    log.info(
+                        "Run: %s | enc_dim=%d | loss=%s | sampler=%s | params=%s",
+                        run_name, enc_dim, loss_type, sampler_type,
+                        f"{sum(p.numel() for p in model.parameters() if p.requires_grad):,}",
+                    )
 
-                evaluate_and_visualize_cardiotwin(
-                    model, test_loader, label_cols_present, out_path,
-                    model_name=run_name, device=device,
-                )
+                    trainer = _LOSS_TRAINERS[loss_type]
+                    model, _, _ = trainer(
+                        model, run_train_loader, run_val_loader, run_test_loader,
+                        params, out_path, device, model_name=run_name,
+                    )
 
-                _run_trajectories(
-                    model, test_ids, test_seqs, test_ehr, ecg_dict,
-                    label_cols_present, vital_scaler, device, out_path,
-                    max_t, max_n, ecg_fm_dim, n_trajectory_samples, min_trajectory_steps,
-                    model_name=run_name,
-                )
+                    plot_kfold_loss_curves_cardiotwin(
+                        lambda fold: run_train_loader,
+                        lambda fold: run_val_loader,
+                        lambda: _build_model(
+                            actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
+                            variant_cls, len(label_cols_present), device, lstm_hidden, dropout,
+                        ),
+                        label_cols_present, params, out_path, device,
+                        n_folds=3, model_name=run_name,
+                    )
 
-                pbar.update(1)
+                    evaluate_and_visualize_cardiotwin(
+                        model, run_test_loader, label_cols_present, out_path,
+                        model_name=run_name, device=device,
+                    )
+
+                    _run_trajectories(
+                        model, test_ids, test_seqs, test_ehr, ecg_dict,
+                        label_cols_present, vital_scaler, device, out_path,
+                        max_t, max_n, ecg_fm_dim, n_trajectory_samples, min_trajectory_steps,
+                        model_name=run_name,
+                    )
+
+                    pbar.update(1)
 
         pbar.close()
 

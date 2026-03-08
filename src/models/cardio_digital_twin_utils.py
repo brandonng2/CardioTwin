@@ -278,6 +278,64 @@ def compute_class_weights(labels_df: pd.DataFrame) -> torch.Tensor:
     return torch.tensor(n_neg / n_pos, dtype=torch.float32)
 
 
+def build_weighted_sampler(labels_df: pd.DataFrame):
+    """
+    Build a WeightedRandomSampler that over-samples stays with rare diagnoses.
+
+    Strategy: each stay's weight = sum of (1 / label_frequency) across its
+    positive labels. A stay with AMI-STEMI (prevalence 0.5%) contributes much
+    more weight than one with only hypertension_crisis (prevalence 8%).
+    Stays with no positive labels get weight = 1 (the minimum).
+
+    This is complementary to loss-level reweighting (bce_weighted / focal):
+      - Sampler reweighting: rare-label stays appear more often per epoch
+      - Loss reweighting: within each batch, rare labels get higher gradient
+
+    Stacking both (sampler=weighted + loss=focal) gives the strongest signal
+    for very rare labels like pericardial_disease_tamponade (<0.3% prevalence).
+
+    Parameters
+    ----------
+    labels_df : DataFrame with LABEL_COLS and subject_id / ed_stay_id columns.
+                Must be the TRAIN split only — never fit on val/test.
+
+    Returns
+    -------
+    torch.utils.data.WeightedRandomSampler
+        Pass directly to DataLoader(sampler=..., shuffle=False).
+        (shuffle must be False when sampler is set — PyTorch enforces this.)
+    """
+    from torch.utils.data import WeightedRandomSampler
+
+    cols = [c for c in LABEL_COLS if c in labels_df.columns]
+    label_matrix = labels_df[cols].values.astype(np.float32)  # (N, n_labels)
+    n_stays = len(label_matrix)
+
+    # Label frequency = fraction of stays that are positive for each label
+    label_freq = label_matrix.mean(axis=0).clip(min=1e-6)  # (n_labels,)
+    label_inv_freq = 1.0 / label_freq                       # rare label → high weight
+
+    # Per-stay weight: sum of inverse frequencies across positive labels
+    # Stays with no positives get weight 1.0 (don't drop them — they teach negatives)
+    stay_weights = label_matrix @ label_inv_freq             # (N,)
+    stay_weights = np.where(stay_weights == 0, 1.0, stay_weights)
+
+    # Log a quick summary so the user can sanity-check the distribution
+    top5_idx = np.argsort(stay_weights)[-5:][::-1]
+    log.info(
+        "WeightedRandomSampler: %d stays | weight range [%.1f, %.1f] | "
+        "top-5 weights: %s",
+        n_stays, stay_weights.min(), stay_weights.max(),
+        [round(float(w), 1) for w in stay_weights[top5_idx]],
+    )
+
+    return WeightedRandomSampler(
+        weights=torch.tensor(stay_weights, dtype=torch.float32),
+        num_samples=n_stays,   # same epoch length as unweighted
+        replacement=True,      # required for weighted sampling
+    )
+
+
 def train_epoch(model, loader, optimizer, criterion, device, grad_clip_norm: float = 1.0) -> float:
     model.train()
     total_loss = 0
@@ -924,20 +982,31 @@ def _build_loaders(
     train_seqs, val_seqs, test_seqs,
     ecg_dict, actual_vital_dim, ecg_fm_dim,
     batch_size, num_workers, max_n, max_t,
+    train_sampler=None,
 ):
-    """Construct train/val/test DataLoaders."""
+    """
+    Construct train/val/test DataLoaders.
+
+    train_sampler : optional WeightedRandomSampler for the train loader.
+                    When provided, shuffle must be False (PyTorch requirement).
+                    Build with build_weighted_sampler(train_labels).
+    """
     collate = partial(collate_fn, max_N=max_n, max_T=max_t, ecg_fm_dim=ecg_fm_dim)
 
-    def make_loader(ids, vf, ehr, labels, seqs, shuffle):
+    def make_loader(ids, vf, ehr, labels, seqs, shuffle, sampler=None):
         return DataLoader(
             CardioEDDataset(ids, vf, ecg_dict, ehr, labels,
                             vital_sequences=seqs, vital_dim=actual_vital_dim, ecg_fm_dim=ecg_fm_dim),
-            batch_size=batch_size, shuffle=shuffle, collate_fn=collate,
-            num_workers=num_workers, pin_memory=True,
+            batch_size=batch_size,
+            shuffle=shuffle if sampler is None else False,  # mutually exclusive with sampler
+            sampler=sampler,
+            collate_fn=collate,
+            num_workers=num_workers,
+            pin_memory=True,
         )
 
     return (
-        make_loader(train_ids, train_feat, train_ehr, train_labels, train_seqs, True),
+        make_loader(train_ids, train_feat, train_ehr, train_labels, train_seqs, True, train_sampler),
         make_loader(val_ids,   val_feat,   val_ehr,   val_labels,   val_seqs,   False),
         make_loader(test_ids,  test_feat,  test_ehr,  test_labels,  test_seqs,  False),
     )
