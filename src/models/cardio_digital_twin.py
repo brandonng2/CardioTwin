@@ -225,8 +225,8 @@ class CardioTwinED_Large(CardioTwinED):
 # --- Active variants for sequential tuning ---
 # Add/remove entries here to control which models run in the pipeline.
 VARIANTS = {
-    # "cardio_digital_twin_baseline": (CardioTwinED_Baseline, 128),
-    "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
+    "cardio_digital_twin_baseline": (CardioTwinED_Baseline, 128),
+    # "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
 }
 
 # --- Held-out size variants (re-enable after gated vs no-gate tuning) ---
