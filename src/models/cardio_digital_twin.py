@@ -395,6 +395,22 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         train_ids = _filter_to_vitals(get_ids(train_df), train_feat)
         val_ids = _filter_to_vitals(get_ids(val_df), val_feat)
         test_ids = _filter_to_vitals(get_ids(test_df), test_feat)
+
+        # Re-filter labels to match the vitals-filtered id lists.
+        # train_labels was built from train_df (pre-filter); build_weighted_sampler
+        # and CardioEDDataset both require labels aligned to the filtered ids exactly,
+        # otherwise WeightedRandomSampler generates indices beyond len(dataset).
+        def _filter_labels(labels_df, ids):
+            id_set = set(ids)
+            mask = [
+                (int(r.subject_id), r.ed_stay_id) in id_set
+                for r in labels_df.itertuples(index=False)
+            ]
+            return labels_df[mask].reset_index(drop=True)
+
+        train_labels = _filter_labels(train_labels, train_ids)
+        val_labels = _filter_labels(val_labels, val_ids)
+        test_labels = _filter_labels(test_labels, test_ids)
         pbar.update(1)
 
         # Step 8: EHR
