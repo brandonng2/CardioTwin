@@ -238,14 +238,14 @@ VARIANTS = {
 # All three are active by default for the full ablation sweep.
 # Comment out entries to skip specific combinations.
 LOSS_TYPES = [
-    "bce",
-    "bce_weighted",
+#    "bce",
+#    "bce_weighted",
     "focal",
 ]
 
 _LOSS_TRAINERS = {
 #     "bce":          train_cardiotwin_model_bce,
-     "bce_weighted": train_cardiotwin_model_bce_weighted,
+#     "bce_weighted": train_cardiotwin_model_bce_weighted,
      "focal":        train_cardiotwin_model_focal,
 }
 

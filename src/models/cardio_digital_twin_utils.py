@@ -10,6 +10,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
