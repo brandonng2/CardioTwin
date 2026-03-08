@@ -224,8 +224,8 @@ class CardioTwinED_Large(CardioTwinED):
 # --- Active variants for sequential tuning ---
 # Add/remove entries here to control which models run in the pipeline.
 VARIANTS = {
-    # "cardio_digital_twin_baseline": (CardioTwinED_Baseline, 128),
-    "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
+    "cardio_digital_twin_baseline": (CardioTwinED_Baseline, 128),
+    # "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
 }
 
 # --- Held-out size variants (re-enable after gated vs no-gate tuning) ---
@@ -239,15 +239,15 @@ VARIANTS = {
 # Comment out entries to skip specific combinations.
 LOSS_TYPES = [
     "bce",
-    # "bce_weighted",
-    # "focal",
+    "bce_weighted",
+    "focal",
 ]
 
-# _LOSS_TRAINERS = {
+_LOSS_TRAINERS = {
 #     "bce":          train_cardiotwin_model_bce,
-#     "bce_weighted": train_cardiotwin_model_bce_weighted,
-#     "focal":        train_cardiotwin_model_focal,
-# }
+     "bce_weighted": train_cardiotwin_model_bce_weighted,
+     "focal":        train_cardiotwin_model_focal,
+}
 
 
 def _build_model(actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
