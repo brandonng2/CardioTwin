@@ -1,385 +1,430 @@
 import json
 import argparse
 from pathlib import Path
+
 from src.preprocessing.static_preprocessing import run_static_preprocessing
 from src.preprocessing.ecg_preprocessing import run_ecg_preprocessing
 from src.preprocessing.vitals_preprocessing import run_vitals_preprocessing
 from src.preprocessing.icd_entity_extraction import run_entity_extraction
+
 from src.models.xgboost import (
     run_xgboost_base_pipeline,
     run_xgboost_weighted_pipeline,
     run_xgboost_smote_pipeline,
 )
 from src.models.xgboost_embedding import run_xgboost_embedding_pipeline
+
 from src.models.mlp import (
-    run_mlp_base_pipeline, 
+    run_mlp_base_pipeline,
     run_mlp_smote_pipeline,
     run_mlp_weighted_pipeline,
-    run_mlp_embedding_pipeline
+    run_mlp_embedding_pipeline,
+    run_mlp_embedding_weighted_pipeline,
 )
+
+from src.models.CardioTwin import run_cardiotwin_final
 
 from src.models.cardio_digital_twin import (
     run_cardiotwin_pipeline,
-    # run_cardiotwin_ablation_pipeline,
-    # CardioTwinConfig,
+    run_cardiotwin_ablation_pipeline,
 )
 
+
+# =============================================================================
+# Config helper
+# =============================================================================
+
 def load_config(config_path):
-    """Load a JSON configuration file."""
     with open(config_path, "r") as f:
         return json.load(f)
 
 
+# =============================================================================
+# Preprocessing runners
+# =============================================================================
+
 def run_static(args):
-    """Run static preprocessing."""
     print("\n" + "=" * 60)
     print("STATIC PREPROCESSING")
     print("=" * 60)
-
     config = load_config("configs/static_preprocessing_params.json")
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_static_preprocessing(in_dir, "configs/static_preprocessing_params.json", out_path)
+    run_static_preprocessing(
+        Path(config["paths"]["in_dir"]),
+        "configs/static_preprocessing_params.json",
+        Path(config["paths"]["out_dir"]),
+    )
     print("✓ Static preprocessing completed")
 
 
 def run_ecg(args):
-    """Run ECG preprocessing."""
     print("\n" + "=" * 60)
     print("ECG PREPROCESSING")
     print("=" * 60)
-
     config = load_config("configs/ecg_preprocessing_params.json")
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_ecg_preprocessing(in_dir, "configs/ecg_preprocessing_params.json", out_path)
+    run_ecg_preprocessing(
+        Path(config["paths"]["in_dir"]),
+        "configs/ecg_preprocessing_params.json",
+        Path(config["paths"]["out_dir"]),
+    )
     print("✓ ECG preprocessing completed")
 
 
 def run_vitals(args):
-    """Run vitals preprocessing."""
     print("\n" + "=" * 60)
     print("VITALS PREPROCESSING")
     print("=" * 60)
-
     config_path = "configs/vitals_preprocessing_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_vitals_preprocessing(in_dir, config_path, out_path)
+    run_vitals_preprocessing(
+        Path(config["paths"]["in_dir"]),
+        config_path,
+        Path(config["paths"]["out_dir"]),
+    )
     print("✓ Vitals preprocessing completed")
 
 
 def run_icd_extraction(args):
-    """Run clinical entity extraction."""
     print("\n" + "=" * 60)
     print("ENTITY EXTRACTION")
     print("=" * 60)
-
     config_path = "configs/icdcode_extractor_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_entity_extraction(in_dir, config_path, out_path)
+    run_entity_extraction(
+        Path(config["paths"]["in_dir"]),
+        config_path,
+        Path(config["paths"]["out_dir"]),
+    )
     print("✓ ICD code extraction completed")
 
 
-def run_xgboost_base(args):
-    """Run XGBoost base model."""
-    print("\n" + "=" * 60)
-    print("XGBOOST BASE MODEL")
-    print("=" * 60)
+# =============================================================================
+# XGBoost runners
+# =============================================================================
 
+def run_xgboost_base(args):
+    print("\n" + "=" * 60)
+    print("XGBOOST BASELINE MODEL")
+    print("=" * 60)
     config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_xgboost_base_pipeline(in_dir, config_path, out_path)
+    run_xgboost_base_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
 
 def run_xgboost_weighted(args):
-    """Run XGBoost weighted model."""
     print("\n" + "=" * 60)
     print("XGBOOST WEIGHTED MODEL")
     print("=" * 60)
-
     config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_xgboost_weighted_pipeline(in_dir, config_path, out_path)
+    run_xgboost_weighted_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
 
 def run_xgboost_smote(args):
-    """Run XGBoost SMOTE model."""
     print("\n" + "=" * 60)
     print("XGBOOST SMOTE MODEL")
     print("=" * 60)
-
     config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
-
-    run_xgboost_smote_pipeline(in_dir, config_path, out_path)
+    run_xgboost_smote_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
 
 def run_xgboost_embedding(args):
-    """Run XGBoost with Embeddings model."""
     print("\n" + "=" * 60)
-    print("XGBOOST W/ EMBEDDINGS MODEL")
+    print("XGBOOST EMBEDDING MODEL")
     print("=" * 60)
-
     config_path = "configs/xgboost_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_xgboost_embedding_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_xgboost_embedding_pipeline(in_dir, config_path, out_path)
 
+def run_xgboost_all_ablation(args):
+    """Run all XGBoost variants: baseline, weighted, SMOTE, embedding."""
+    print("\n" + "=" * 60)
+    print("XGBOOST — FULL ABLATION (baseline / weighted / smote / embedding)")
+    print("=" * 60)
+    run_xgboost_base(args)
+    run_xgboost_weighted(args)
+    run_xgboost_smote(args)
+    run_xgboost_embedding(args)
+
+
+# =============================================================================
+# MLP runners
+# =============================================================================
 
 def run_mlp_baseline(args):
-    """Run MLP baseline model."""
     print("\n" + "=" * 60)
     print("MLP BASELINE MODEL")
     print("=" * 60)
-
     config_path = "configs/mlp_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_mlp_base_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_mlp_base_pipeline(in_dir, config_path, out_path)
 
 def run_mlp_weighted(args):
-    """Run MLP weighted model."""
     print("\n" + "=" * 60)
     print("MLP WEIGHTED MODEL")
     print("=" * 60)
-
     config_path = "configs/mlp_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_mlp_weighted_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_mlp_weighted_pipeline(in_dir, config_path, out_path)
 
 def run_mlp_smote(args):
-    """Run MLP SMOTE model."""
     print("\n" + "=" * 60)
     print("MLP SMOTE MODEL")
     print("=" * 60)
-
     config_path = "configs/mlp_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_mlp_smote_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_mlp_smote_pipeline(in_dir, config_path, out_path)
 
 def run_mlp_embedding(args):
-    """Run MLP Embeddings model."""
     print("\n" + "=" * 60)
-    print("MLP EMBEDDINGS MODEL")
+    print("MLP EMBEDDING MODEL")
     print("=" * 60)
-
     config_path = "configs/mlp_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_mlp_embedding_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_mlp_embedding_pipeline(in_dir, config_path, out_path)
 
+def run_mlp_embedding_weighted(args):
+    print("\n" + "=" * 60)
+    print("MLP EMBEDDING WEIGHTED MODEL")
+    print("=" * 60)
+    config_path = "configs/mlp_params.json"
+    config = load_config(config_path)
+    run_mlp_embedding_weighted_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
+
+
+def run_mlp_all_ablation(args):
+    """Run all MLP variants: baseline, weighted, SMOTE, embedding, embedding_weighted."""
+    print("\n" + "=" * 60)
+    print("MLP — FULL ABLATION (baseline / weighted / smote / embedding / embedding_weighted)")
+    print("=" * 60)
+    run_mlp_baseline(args)
+    run_mlp_weighted(args)
+    run_mlp_smote(args)
+    run_mlp_embedding(args)
+    run_mlp_embedding_weighted(args)
+
+
+# =============================================================================
+# CardioTwin runners
+# =============================================================================
 
 def run_cardiotwin(args):
-    """Run CardioTwin full multimodal pipeline (ECG-FM + vitals + EHR, gated fusion)."""
+    """Main pipeline — baseline only (128-dim, gated, BCE, no sampler)."""
     print("\n" + "=" * 60)
-    print("CARDIOTWIN PIPELINE")
+    print("CARDIOTWIN — FINAL MODEL")
     print("=" * 60)
+    config_path = "configs/CardioTwin_model_params.json"
+    config = load_config(config_path)
+    run_cardiotwin_final(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
+
+def run_cardiotwin_ablation(args):
+    """Full ablation — all variants x all loss types x all sampler modes."""
+    print("\n" + "=" * 60)
+    print("CARDIOTWIN — FULL ABLATION")
+    print("=" * 60)
     config_path = "configs/cardiotwin_params.json"
     config = load_config(config_path)
-    in_dir = Path(config["paths"]["in_dir"])
-    out_path = Path(config["paths"]["out_dir"])
+    run_cardiotwin_ablation_pipeline(
+        Path(config["paths"]["in_dir"]), config_path, Path(config["paths"]["out_dir"])
+    )
 
-    run_cardiotwin_pipeline(in_dir, config_path, out_path)
 
+# =============================================================================
+# CLI
+# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Patient-Specific Cardiovascular Digital Twin for Personalized Cardiac Monitoring",
+        description="Patient-Specific Cardiovascular Digital Twin — Pipeline Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-            Examples:
-            # Run everything
-            python run.py --all
+Examples:
+  # Main pipeline: preprocessing + CardioTwin final model
+  python run.py --all
 
-            # Run specific steps
-            python run.py --static --ecg
-            python run.py --ecg
+  # Preprocessing only
+  python run.py --preprocess
 
-            # Run everything except certain steps
-            python run.py --all --skip-static
+  # Individual preprocessing steps
+  python run.py --static
+  python run.py --ecg
+  python run.py --vitals
+  python run.py --entities
 
-            # Run XGBoost variants
-            python run.py --xgboost-baseline    # Baseline
-            python run.py --xgboost-weighted    # Per-label scale_pos_weight
-            python run.py --xgboost-smote       # SMOTE on rare labels
-            python run.py --xgboost-embedding   # ECG-FM Embeddings
-            
-            # Run MLP variants
-            python run.py --mlp-baseline
-            python run.py --mlp-weighted
-            python run.py --mlp-smote
-            python run.py --mlp-embedding
+  # XGBoost variants
+  python run.py --xgboost-baseline
+  python run.py --xgboost-weighted
+  python run.py --xgboost-smote
+  python run.py --xgboost-embedding
+  python run.py --xgboost-ablation        # all four above in sequence
 
-            # CardioTwin full pipeline
-            python run.py --cardiotwin
+  # MLP variants
+  python run.py --mlp-baseline
+  python run.py --mlp-weighted
+  python run.py --mlp-smote
+  python run.py --mlp-embedding
+  python run.py --mlp-embedding-weighted
+  python run.py --mlp-ablation            # all five above in sequence
+
+  # CardioTwin
+  python run.py --cardiotwin              # final model only (main pipeline)
+  python run.py --cardiotwin-ablation     # all variants x losses x samplers
         """,
     )
 
-    # Run specific components
-    parser.add_argument("--all", action="store_true", help="Run all preprocessing steps")
-    parser.add_argument("--static", action="store_true", help="Run static preprocessing")
-    parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
-    parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
-    parser.add_argument("--entities", action="store_true", help="Run entity extraction")
+    # -----------------------------------------------------------------
+    # Main pipeline
+    # -----------------------------------------------------------------
     parser.add_argument(
-        "--xgboost-baseline", action="store_true", dest="xgb_base",
-        help="Run XGBoost base model (default)",
-    )
-    parser.add_argument(
-        "--xgboost-weighted", action="store_true", dest="xgb_weighted",
-        help="Run XGBoost weighted model — per-label scale_pos_weight",
-    )
-    parser.add_argument(
-        "--xgboost-smote", action="store_true", dest="xgb_smote",
-        help="Run XGBoost SMOTE model — SMOTE on labels < 8% prevalence",
-    )
-    parser.add_argument(
-        "--xgboost-embedding", action="store_true", dest="xgb_embedding",
-        help="Run XGBoost embedding model — Creating ECG embeddings instead of derived features",
-    )
-    parser.add_argument(
-        "--mlp-baseline", action="store_true", dest="mlp_baseline",
-        help="Run MLP baseline model (predicts diagnosis labels)",
-    )
-    parser.add_argument(
-        "--mlp-weighted", action="store_true", dest="mlp_weighted",
-        help="Run MLP weighted model (per-label class weights)",
-    )
-    parser.add_argument(
-        "--mlp-smote", action="store_true", dest="mlp_smote",
-        help="Run MLP SMOTE model (SMOTE on rare labels)",
-    )
-    parser.add_argument(
-        "--mlp-embedding", action="store_true", dest="mlp_embedding",
-        help="Run MLP embedding model — Creating ECG embeddings instead of derived features",
-    )
-    parser.add_argument(
-        "--lstm-baseline", action="store_true", dest="lstm_baseline",
-        help="Run LSTM baseline model",
-    )
-    parser.add_argument(
-        "--cardiotwin", action="store_true", dest="cardiotwin",
-        help="Run CardioTwin full multimodal pipeline (ECG-FM + vitals + EHR)",
+        "--all", action="store_true",
+        help="Run full main pipeline: all preprocessing + CardioTwin final model",
     )
 
-    # Skip flags (for use with --all)
-    parser.add_argument("--skip-static", action="store_true", help="Skip static preprocessing")
-    parser.add_argument("--skip-ecg", action="store_true", help="Skip ECG preprocessing")
-    parser.add_argument("--skip-vitals", action="store_true", help="Skip vitals preprocessing")
-    parser.add_argument("--skip-entities", action="store_true", help="Skip entity extraction")
-    parser.add_argument("--skip-xgboost-base", action="store_true", help="Skip XGBoost base model")
-    parser.add_argument("--skip-xgboost-embedding", action="store_true", help="Skip XGBoost embedding model")
-    parser.add_argument("--skip-xgboost-smote", action="store_true", help="Skip XGBoost SMOTE model")
-    parser.add_argument("--skip-xgboost-weighted", action="store_true", help="Skip XGBoost weighted model")
-    parser.add_argument("--skip-mlp-baseline", action="store_true", help="Skip MLP baseline model")
-    parser.add_argument("--skip-mlp-weighted", action="store_true", help="Skip MLP weighted model")
-    parser.add_argument("--skip-mlp-smote", action="store_true", help="Skip MLP SMOTE model")
-    parser.add_argument("--skip-mlp-embedding", action="store_true", help="Skip MLP embedding model")
-    parser.add_argument("--skip-lstm-baseline", action="store_true", help="Skip LSTM baseline model")
-    parser.add_argument("--skip-cardiotwin", action="store_true", help="Skip CardioTwin pipeline")
+    # -----------------------------------------------------------------
+    # Preprocessing
+    # -----------------------------------------------------------------
+    parser.add_argument(
+        "--preprocess", action="store_true",
+        help="Run all preprocessing steps (static, ECG, vitals, entities)",
+    )
+    parser.add_argument("--static",   action="store_true", help="Run static preprocessing")
+    parser.add_argument("--ecg",      action="store_true", help="Run ECG preprocessing")
+    parser.add_argument("--vitals",   action="store_true", help="Run vitals preprocessing")
+    parser.add_argument("--entities", action="store_true", help="Run ICD entity extraction")
+
+    # -----------------------------------------------------------------
+    # XGBoost
+    # -----------------------------------------------------------------
+    parser.add_argument("--xgboost-baseline",  action="store_true", dest="xgb_base",
+                        help="XGBoost baseline (normalized, no weighting)")
+    parser.add_argument("--xgboost-weighted",  action="store_true", dest="xgb_weighted",
+                        help="XGBoost with per-label scale_pos_weight")
+    parser.add_argument("--xgboost-smote",     action="store_true", dest="xgb_smote",
+                        help="XGBoost with capped SMOTE on rare labels")
+    parser.add_argument("--xgboost-embedding", action="store_true", dest="xgb_embedding",
+                        help="XGBoost with ECG-FM 1536-dim embeddings")
+    parser.add_argument("--xgboost-ablation",  action="store_true", dest="xgb_ablation",
+                        help="Run all XGBoost variants in sequence")
+
+    # -----------------------------------------------------------------
+    # MLP
+    # -----------------------------------------------------------------
+    parser.add_argument("--mlp-baseline",          action="store_true", dest="mlp_baseline",
+                        help="MLP baseline (normalized, uniform BCE)")
+    parser.add_argument("--mlp-weighted",          action="store_true", dest="mlp_weighted",
+                        help="MLP with per-label pos_weight")
+    parser.add_argument("--mlp-smote",             action="store_true", dest="mlp_smote",
+                        help="MLP with capped SMOTE on rare labels")
+    parser.add_argument("--mlp-embedding",         action="store_true", dest="mlp_embedding",
+                        help="MLP with ECG-FM 1536-dim embeddings")
+    parser.add_argument("--mlp-embedding-weighted", action="store_true", dest="mlp_embedding_weighted",
+                        help="MLP with ECG-FM embeddings + pos_weight")
+    parser.add_argument("--mlp-ablation",          action="store_true", dest="mlp_ablation",
+                        help="Run all MLP variants in sequence")
+
+    # -----------------------------------------------------------------
+    # CardioTwin
+    # -----------------------------------------------------------------
+    parser.add_argument(
+        "--cardiotwin", action="store_true", dest="cardiotwin",
+        help="Run CardioTwin final model (baseline: 128-dim, gated, BCE, no sampler)",
+    )
+    parser.add_argument(
+        "--cardiotwin-ablation", action="store_true", dest="cardiotwin_ablation",
+        help="Run full CardioTwin ablation (all variants x loss types x samplers)",
+    )
 
     args = parser.parse_args()
 
-    # Determine what to run
-    run_all = args.all or not any([
-        args.static, args.ecg, args.vitals, args.entities,
-        args.cardiotwin
-    ])
+    # --all = preprocess + CardioTwin final
+    run_all = args.all
 
-    print("=" * 60)
-    print("MIMIC-IV PREPROCESSING PIPELINE")
-    print("=" * 60)
+    # --preprocess = all four preprocessing steps
+    run_preprocess = run_all or args.preprocess
 
-    # Static preprocessing
-    if (run_all and not args.skip_static) or args.static:
+    # ---------------------------------------------------------------
+    # Preprocessing
+    # ---------------------------------------------------------------
+    if run_preprocess or args.static:
         run_static(args)
-
-    # ECG preprocessing
-    if (run_all and not args.skip_ecg) or args.ecg:
+    if run_preprocess or args.ecg:
         run_ecg(args)
-
-    # Vitals preprocessing
-    if (run_all and not args.skip_vitals) or args.vitals:
+    if run_preprocess or args.vitals:
         run_vitals(args)
-
-    # Entity extraction
-    if (run_all and not args.skip_entities) or args.entities:
+    if run_preprocess or args.entities:
         run_icd_extraction(args)
 
-    print("\n" + "=" * 60)
-    print("✓ ALL PREPROCESSING COMPLETED!")
-    print("=" * 60)
+    if run_preprocess:
+        print("\n" + "=" * 60)
+        print("✓ ALL PREPROCESSING COMPLETED")
+        print("=" * 60)
 
-    # XGBoost Models
-    if (run_all and not args.skip_xgboost_base) or args.xgb_base:
-        run_xgboost_base(args)
+    # ---------------------------------------------------------------
+    # XGBoost
+    # ---------------------------------------------------------------
+    if args.xgb_ablation:
+        run_xgboost_all_ablation(args)
+    else:
+        if args.xgb_base:
+            run_xgboost_base(args)
+        if args.xgb_weighted:
+            run_xgboost_weighted(args)
+        if args.xgb_smote:
+            run_xgboost_smote(args)
+        if args.xgb_embedding:
+            run_xgboost_embedding(args)
 
-    if (run_all and not args.skip_xgboost_weighted) or args.xgb_weighted:
-        run_xgboost_weighted(args)
+    # ---------------------------------------------------------------
+    # MLP
+    # ---------------------------------------------------------------
+    if args.mlp_ablation:
+        run_mlp_all_ablation(args)
+    else:
+        if args.mlp_baseline:
+            run_mlp_baseline(args)
+        if args.mlp_weighted:
+            run_mlp_weighted(args)
+        if args.mlp_smote:
+            run_mlp_smote(args)
+        if args.mlp_embedding:
+            run_mlp_embedding(args)
+        if args.mlp_embedding_weighted:
+            run_mlp_embedding_weighted(args)
 
-    if (run_all and not args.skip_xgboost_smote) or args.xgb_smote:
-        run_xgboost_smote(args)
-
-    if (run_all and not args.skip_xgboost_embedding) or args.xgb_embedding:
-        run_xgboost_embedding(args)
-
-    # MLP Baseline Model
-    if (run_all and not args.skip_mlp_baseline) or args.mlp_baseline:
-        run_mlp_baseline(args)
-
-    # MLP Weighted Model
-    if (run_all and not args.skip_mlp_weighted) or args.mlp_weighted:
-        run_mlp_weighted(args)
-
-    # MLP SMOTE Model
-    if (run_all and not args.skip_mlp_smote) or args.mlp_smote:
-        run_mlp_smote(args)
-        
-    # MLP EMBEDDING Model
-    if (run_all and not args.skip_mlp_embedding) or args.mlp_embedding:
-        run_mlp_embedding(args)
-
-    # CardioTwin full pipeline
-    if (run_all and not args.skip_cardiotwin) or args.cardiotwin:
+    # ---------------------------------------------------------------
+    # CardioTwin
+    # ---------------------------------------------------------------
+    if args.cardiotwin_ablation:
+        run_cardiotwin_ablation(args)
+    elif run_all or args.cardiotwin:
         run_cardiotwin(args)
 
-    # if getattr(args, "cardiotwin_focal", False):
-    #     run_cardiotwin_focal(args)
-
-    # if getattr(args, "cardiotwin_concat", False):
-    #     run_cardiotwin_concat(args)
-
-    # if getattr(args, "cardiotwin_ablation", False):
-    #     run_cardiotwin_ablation(args)
 
 if __name__ == "__main__":
     main()

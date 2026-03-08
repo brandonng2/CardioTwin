@@ -1,7 +1,7 @@
 {
   "paths": {
     "in_dir": "data/processed",
-    "out_dir": "model_results/",
+    "out_dir": "model_results/cardio_digital_twin/",
     "base_records_dir": "/home/b5ng/teams/b03/ecg/files"
   },
   "sources": {

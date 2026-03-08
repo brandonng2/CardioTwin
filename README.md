@@ -1,62 +1,139 @@
 # ClinicalDigitalTwin
 
-A clean, modular pipeline for preprocessing MIMIC-IV data (Hospital, ICU, ED, and ECG) for clinical digital twin modeling, with baseline XGBoost models for multi-label prediction of cardiovascular diagnoses and ECG findings.
+An end-to-end pipeline for preprocessing MIMIC-IV clinical and ECG data and training multimodal cardiovascular diagnosis models — from XGBoost and MLP baselines through CardioTwin, a gated fusion deep learning digital twin.
+
+---
+
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Data Access](#data-access)
+- [Data Extraction](#data-extraction)
+- [Installation](#installation)
+- [CLI Quick Reference](#cli-quick-reference)
+- [Usage](#usage)
+  - [Preprocessing](#preprocessing)
+  - [XGBoost Models](#xgboost-models)
+  - [MLP Models](#mlp-models)
+  - [CardioTwin](#cardiotwin)
+- [Models](#models)
+  - [XGBoost](#xgboost)
+  - [MLP](#mlp)
+  - [CardioTwin (Final Model)](#cardiotwin-final-model)
+- [Evaluation](#evaluation)
+- [Citations](#citations)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
+---
 
 ## Project Overview
 
-This repository provides an end-to-end framework for preparing integrated MIMIC-IV datasets for clinical digital twin modeling. It combines data from:
+This repository provides an end-to-end framework for preparing integrated MIMIC-IV datasets for cardiovascular digital twin modeling. It combines data from:
 
-- **MIMIC-IV:** Core hospital and ICU data including admissions, diagnoses, omr, labevents, vital signs, and patient demographics
+- **MIMIC-IV:** Core hospital and ICU data including admissions, diagnoses, lab events, vital signs, and patient demographics
 - **MIMIC-IV-ED:** Emergency department visits, diagnoses, and vitals
-- **MIMIC-IV-ECG:** Electrocardiogram recordings and measurements
+- **MIMIC-IV-ECG:** 12-lead electrocardiogram recordings and machine measurements
 
-The pipeline supports both static (EHR demographic) and temporal (vitals and ECG) preprocessing, enabling streamlined integration for downstream analyses and predictive modeling. **This project specifically focuses on the cohort of patients with cardiovascular from the emergency department (ED).**
+The pipeline supports both static (EHR/demographic) and temporal (vitals and ECG) preprocessing, enabling streamlined integration for downstream predictive modeling. **This project specifically focuses on the cohort of ED patients with cardiovascular presentations.**
 
-### Baseline Models
+Three tiers of models are included, each building on the last:
 
-The repository includes baseline models that serve as benchmarks for cardiovascular diagnosis prediction:
-- **XGBoost (base, weighted, SMOTE):** Multi-label classifiers predicting cardiovascular ICD-10 diagnosis labels from ECG machine measurements, vital signs, and demographic features. All variants use StandardScaler normalization; the base variant is the default.
-- **MLP:** Feedforward neural network with BCEWithLogitsLoss and per-label class weighting for the same prediction task
+- **XGBoost (baseline, weighted, SMOTE, embedding):** Multi-label classifiers predicting 17 cardiovascular ICD-10 diagnosis categories from ECG machine measurements, vital sign statistics, and demographics
+- **MLP (baseline, weighted, SMOTE, embedding, embedding_weighted):** Feedforward neural network variants for the same task
+- **CardioTwin:** A multimodal gated fusion network combining ECG-FM embeddings (1536-dim), vital sign sequences (LSTM), and EHR features — the primary model of this project
 
-These baselines establish performance benchmarks for more sophisticated deep learning models (LSTM, Transformer).
+---
 
 ## Project Structure
+
 ```
 .
 ├── configs/
-│   ├── static_preprocessing.json      # Configuration for static/column-based CSV preprocessing
-│   ├── ecg_preprocessing.json         # Configuration for ECG signal preprocessing
-│   ├── icdcode_extractor.json         # Configuration for ICD code extraction and labeling
-│   ├── vitals_preprocessing.json      # Configuration for vital signs preprocessing
-│   └── xgboost_baseline_params.json   # Configuration for XGBoost baseline model
+│   ├── static_preprocessing_params.json    # Config for static/column-based CSV preprocessing
+│   ├── ecg_preprocessing_params.json       # Config for ECG signal preprocessing
+│   ├── vitals_preprocessing_params.json    # Config for vital signs preprocessing
+│   ├── icdcode_extractor_params.json       # Config for ICD code extraction and labeling
+│   ├── xgboost_params.json                 # Config for all XGBoost model variants
+│   ├── mlp_params.json                     # Config for all MLP model variants
+│   ├── cardiotwin_params.json              # Config for CardioTwin full ablation sweep
+│   └── CardioTwin_model_params.json        # Config for CardioTwin final model
 ├── data/
-│   ├── raw/                           # Raw input data files (e.g., MIMIC-IV CSVs)
-│   ├── processed/                     # Output of preprocessing scripts
-│   └── model_results/                 # Model outputs (metrics, plots, predictions)
-├── notebooks/                         # Jupyter notebooks for testing and exploration
-│   ├── static_preprocessing.ipynb     # Notebook for static preprocessing development
-│   ├── ecg_preprocessing.ipynb        # Notebook for ECG preprocessing development
-│   ├── icd_extraction.ipynb           # Notebook for ICD code extraction development
-│   ├── vitals_preprocessing.ipynb     # Notebook for vitals preprocessing development
-│   ├── xgboost_baseline.ipynb         # Notebook for XGBoost baseline model development
-│   └── misc/                          # Miscellaneous notebooks
+│   ├── raw/                                # Raw MIMIC-IV input files (CSVs, WFDB ECG records)
+│   └── processed/                          # Output of all preprocessing scripts
+├── model_results/
+│   ├── xgboost/
+│   │   ├── xgboost_baseline/               # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── xgboost_weighted/               # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── xgboost_smote/                  # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── xgboost_embedding/              # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── xgboost_overall_results_ablation.csv   # One aggregate-metrics row per variant
+│   │   └── xgboost_results_ablation.csv           # 17 per-label metric rows per variant
+│   ├── mlp/
+│   │   ├── mlp_baseline/                   # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── mlp_weighted/                   # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── mlp_smote/                      # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── mlp_embedding/                  # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── mlp_embedding_weighted/         # Plots, per-label CSV, and overall CSV for this variant
+│   │   ├── mlp_overall_results_ablation.csv        # One aggregate-metrics row per variant
+│   │   └── mlp_results_ablation.csv                # 17 per-label metric rows per variant
+│   ├── cardio_digital_twin/                # Full ablation sweep (4 variants x 3 losses x 2 samplers)
+│   │   ├── cardio_digital_twin_baseline_bce_none/         # enc_dim=128, gated fusion, plain BCE, no sampler
+│   │   ├── cardio_digital_twin_baseline_bce_weighted/     # enc_dim=128, gated fusion, BCE + pos_weight, no sampler
+│   │   ├── cardio_digital_twin_baseline_bce_none_weighted/     # enc_dim=128, gated fusion, plain BCE, weighted sampler
+│   │   ├── cardio_digital_twin_baseline_bce_weighted_weighted/ # enc_dim=128, gated fusion, BCE + pos_weight, weighted sampler
+│   │   ├── cardio_digital_twin_baseline_focal_none/       # enc_dim=128, gated fusion, focal loss, no sampler
+│   │   ├── cardio_digital_twin_baseline_focal_weighted/   # enc_dim=128, gated fusion, focal loss, weighted sampler
+│   │   ├── cardio_digital_twin_nogate_*/                  # enc_dim=128, mean-pool fusion (gate ablation), same loss/sampler combos
+│   │   ├── cardio_digital_twin_medium_*/                  # enc_dim=256, gated fusion, same loss/sampler combos
+│   │   ├── cardio_digital_twin_large_*/                   # enc_dim=512, gated fusion, same loss/sampler combos
+│   │   ├── cardio_digital_twin_overall_results_ablation.csv   # One aggregate-metrics row per variant/loss/sampler combo
+│   │   └── cardio_digital_twin_results_ablation.csv           # 17 per-label metric rows per variant/loss/sampler combo
+│   └── CardioTwin/                         # Final model outputs
+│       ├── CardioTwin.pt                   # Saved model checkpoint
+│       ├── CardioTwin_roc_curves.png       # ROC curves across all 17 labels
+│       ├── CardioTwin_pr_curves.png        # Precision-recall curves across all 17 labels
+│       ├── CardioTwin_confusion_matrix.png # Aggregated binary confusion matrix
+│       ├── CardioTwin_cooccurrence_matrix.png  # Label co-occurrence heatmap
+│       ├── CardioTwin_kfold_loss_curves.png    # 3-fold cross-validation loss curves
+│       ├── CardioTwin_results.csv          # Per-label metrics
+│       ├── CardioTwin_overall_results.csv  # Aggregate metrics
+│       └── CardioTwin_trajectories/        # Per-patient vital trajectory simulations
+├── notebooks/
+│   ├── static_preprocessing.ipynb         # Notebook for static preprocessing development
+│   ├── ecg_preprocessing.ipynb            # Notebook for ECG preprocessing development
+│   ├── vitals_preprocessing.ipynb         # Notebook for vitals preprocessing development
+│   ├── icd_extraction.ipynb               # Notebook for ICD code extraction development
+│   ├── xgboost_baseline.ipynb             # Notebook for XGBoost baseline development
+│   └── misc/                              # Miscellaneous exploration notebooks
 ├── src/
 │   ├── preprocessing/
-│   │   ├── static_preprocessing.py    # Functions to preprocess static/column-based data
-│   │   ├── ecg_preprocessing.py       # Functions to preprocess ECG signals
-│   │   ├── icd_entity_extraction.py   # Functions to extract cardiovascular clinical entities from ICD codes
-│   │   ├── icd_code_labels.py         # ICD-10 code label mappings for cardiovascular conditions
-│   │   ├── vitals_preprocessing.py    # Functions to preprocess vital signs data
-│   │   └── machine_measurements_labels.py  # Label mappings for machine measurements
+│   │   ├── static_preprocessing.py        # Preprocesses static/column-based MIMIC-IV tables
+│   │   ├── ecg_preprocessing.py           # Preprocesses raw WFDB ECG signals
+│   │   ├── vitals_preprocessing.py        # Preprocesses ED vital sign time series
+│   │   ├── icd_entity_extraction.py       # Extracts cardiovascular ICD-10 labels per encounter
+│   │   ├── icd_code_labels.py             # ICD-10 to cardiovascular category label mappings
+│   │   └── machine_measurements_labels.py # Label mappings for ECG machine measurements
 │   └── models/
-│       ├── tabular_utils.py           # Shared data loading, feature engineering, and evaluation utilities
-│       ├── mlp.py                     # MLP baseline model for multi-label classification
-│       └── xgboost.py                 # XGBoost models: base (normalized), weighted, and SMOTE variants
-├── run.py                             # Main script to execute the preprocessing pipeline
-├── environment.yml                    # Conda environment and dependencies
-├── .gitignore                         # Git ignore rules
-└── README.md                          # Project overview and setup instructions
+│       ├── tabular_utils.py               # Shared data loading, feature engineering, evaluation, and ablation CSV writes
+│       ├── ecg_fm.py                      # ECG-FM checkpoint loading and batched embedding extraction
+│       ├── xgboost.py                     # XGBoost baseline, weighted, and SMOTE variant pipelines
+│       ├── xgboost_embedding.py           # XGBoost pipeline with ECG-FM 1536-dim embeddings
+│       ├── mlp.py                         # MLP baseline, weighted, SMOTE, and embedding variant pipelines
+│       ├── cardio_digital_twin_classes.py # CardioEDDataset, collate_fn, CardioTwinED and NoGate model classes
+│       ├── cardio_digital_twin_utils.py   # Training loops, evaluation, trajectory simulation, and feature builders
+│       ├── cardio_digital_twin.py         # Variant registry, run_cardiotwin_pipeline, and run_cardiotwin_ablation_pipeline
+│       ├── ecgfm_pretrained.pt            # ECG-FM Model
+│       └── CardioTwin.py                  # Final model entry point: 128-dim gated fusion, BCE loss, no sampler
+├── run.py                                 # CLI runner for all preprocessing and model pipelines
+├── environment.yml                        # Conda environment and dependencies
+├── .gitignore                             # Git ignore rules
+└── README.md                              # Project overview and setup instructions
 ```
+
+---
 
 ## Prerequisites
 
@@ -65,397 +142,403 @@ These baselines establish performance benchmarks for more sophisticated deep lea
 - **Required Training:** CITI "Data or Specimens Only Research" certification
 - **Google BigQuery:** Optional but recommended for efficient data extraction
 
+---
+
 ## Data Access
 
-This project requires access to **multiple MIMIC-IV datasets**.
+This project requires access to multiple MIMIC-IV datasets.
 
-### 🔓 Unrestricted Dataset (No Credentialing Required)
+### 🔓 Unrestricted (No Credentialing Required)
 
-- **MIMIC-IV-ECG v1.0** (ECG recordings): https://physionet.org/content/mimic-iv-ecg/1.0/  
-  Download `machine_measurements.csv` and `record_list.csv` (rename this to `ecg_record_list.csv`).
+- **MIMIC-IV-ECG v1.0:** https://physionet.org/content/mimic-iv-ecg/1.0/
+  Download `machine_measurements.csv` and `record_list.csv` (rename to `ecg_record_list.csv`).
 
-MIMIC-IV-ECG is a subset of MIMIC-IV containing 800,000+ diagnostic ECGs matched to hospital admissions. Each record includes:
-- **Waveform data:** 12-lead ECG signals at 500 Hz stored in WFDB format
-- **Machine measurements:** Automated interval measurements (PR, QRS, QT, RR) and axis calculations
-- **Machine report:** Automated ECG findings (e.g., sinus rhythm, atrial fibrillation, LVH)
-- **Timing:** ECG acquisition time linked to ED and hospital stay identifiers
-
----
+MIMIC-IV-ECG contains 800,000+ diagnostic ECGs matched to hospital admissions, including 12-lead waveform data at 500 Hz (WFDB format), automated interval measurements (PR, QRS, QT, RR), axis calculations, machine-generated ECG findings, and timing linked to ED and hospital stay identifiers.
 
 ### 🔒 Restricted-Access Datasets
 
-These require completing PhysioNet credentialing (CITI + user agreement):
+These require PhysioNet credentialing (CITI training + data use agreement):
 
-- **MIMIC-IV v3.1** (Core hospital data): https://physionet.org/content/mimiciv/3.1/
-- **MIMIC-IV-ED v2.2** (Emergency department data): https://physionet.org/content/mimic-iv-ed/2.2/
+- **MIMIC-IV v3.1:** https://physionet.org/content/mimiciv/3.1/
+- **MIMIC-IV-ED v2.2:** https://physionet.org/content/mimic-iv-ed/2.2/
 
-
-### Steps to Obtain Access:
+**Steps to obtain access:**
 
 1. Complete the CITI "Data or Specimens Only Research" course: https://about.citiprogram.org/
 2. Create a PhysioNet account: https://physionet.org/register/
-3. Request access to each dataset above (separate applications required)
+3. Request access to each dataset (separate applications required)
 4. Sign the PhysioNet Credentialed Health Data Use Agreement for each
 5. Once approved, proceed to Data Extraction below
 
-**Note:** Approval typically takes a few business days. You must be approved for all three datasets to use this pipeline.
+> Approval typically takes a few business days. You must be approved for all three datasets to use this pipeline.
+
+---
 
 ## Data Extraction
 
 ### Method 1: Google BigQuery (Recommended)
 
-This project focuses on **patients who have ECG records** in MIMIC-IV. Use these SQL queries in Google BigQuery to extract the relevant subset:
+All queries filter for subjects with ECG records in MIMIC-IV-ECG.
 
-#### 1. Hospital Diagnoses (ICD Codes)
+#### 1. Hospital Diagnoses
+
 ```sql
 -- Save as: diagnoses_icd.csv
-SELECT
-   di.*,
-   did.long_title
+SELECT di.*, did.long_title
 FROM `physionet-data.mimiciv_3_1_hosp.diagnoses_icd` AS di
 JOIN `physionet-data.mimiciv_3_1_hosp.d_icd_diagnoses` AS did
-   ON di.icd_code = did.icd_code AND di.icd_version = did.icd_version
+  ON di.icd_code = did.icd_code AND di.icd_version = did.icd_version
 WHERE di.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
 #### 2. Hospital Admissions
+
 ```sql
 -- Save as: admissions.csv
-SELECT *
-FROM `physionet-data.mimiciv_3_1_hosp.admissions` AS a
-WHERE a.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_3_1_hosp.admissions`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
 #### 3. Patient Demographics
+
 ```sql
 -- Save as: patients.csv
-SELECT *
-FROM `physionet-data.mimiciv_3_1_hosp.patients` AS p
-WHERE p.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_3_1_hosp.patients`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
 #### 4. ECG Record List
+
 ```sql
 -- Save as: ecg_record_list.csv
-SELECT *
-FROM `physionet-data.mimiciv_ecg.record_list` AS rl
-WHERE rl.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_ecg.record_list`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
 #### 5. ICU Stays
+
 ```sql
 -- Save as: icustays.csv
-SELECT *
-FROM `physionet-data.mimiciv_3_1_icu.icustays` AS icu
-WHERE icu.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_3_1_icu.icustays`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
-#### 6. Emergency Department Diagnoses
+#### 6. ED Diagnoses
+
 ```sql
 -- Save as: ed_diagnosis.csv
-SELECT *
-FROM `physionet-data.mimiciv_ed.diagnosis` AS edd
-WHERE edd.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_ed.diagnosis`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
-#### 7. Emergency Department Stays
+#### 7. ED Stays
+
 ```sql
 -- Save as: edstays.csv
-SELECT *
-FROM `physionet-data.mimiciv_ed.edstays` AS eds
-WHERE eds.subject_id IN (
-   SELECT DISTINCT subject_id
-   FROM `physionet-data.mimiciv_ecg.machine_measurements`
+SELECT * FROM `physionet-data.mimiciv_ed.edstays`
+WHERE subject_id IN (
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
 ```
 
-### 8. ED Vitals
+#### 8. ED Vitals
+
 ```sql
--- ED vital signs for subjects with ECG data
-SELECT
- subject_id,stay_id,charttime,temperature,heartrate,resprate,o2sat,sbp,dbp
+-- Save as: ed_vitals.csv
+SELECT subject_id, stay_id, charttime, temperature, heartrate, resprate, o2sat, sbp, dbp
 FROM `physionet-data.mimiciv_ed.vitalsign`
 WHERE subject_id IN (
- SELECT DISTINCT subject_id
- FROM `physionet-data.mimiciv_ecg.machine_measurements`
+  SELECT DISTINCT subject_id FROM `physionet-data.mimiciv_ecg.machine_measurements`
 )
-ORDER BY charttime;
+ORDER BY charttime
 ```
 
-### Data Placement
+Export each result as a CSV from BigQuery and place all files in `data/raw/`. Required filenames:
 
-After running these queries:
-1. Export each result as CSV from BigQuery
-2. Place all CSV files in the `data/raw/` directory
-3. Ensure filenames match those specified in the SQL comments
-
-**Cohort Size:** All queries filter for patients with ECG records, resulting in a subset of the full MIMIC-IV population.
+- `admissions.csv`, `diagnoses_icd.csv`, `patients.csv`, `icustays.csv`
+- `edstays.csv`, `ed_diagnosis.csv`, `ed_vitals.csv`
+- `machine_measurements.csv`, `ecg_record_list.csv`
 
 ### Method 2: Direct Download
 
-Alternatively, download complete datasets and filter locally:
-1. Download each dataset from PhysioNet (links above)
-2. Extract relevant CSV files to `data/static`
-3. The preprocessing pipeline will automatically filter for ECG patients
+Download the complete datasets from PhysioNet, extract the relevant CSVs to `data/raw/`, and the preprocessing pipeline will filter for ECG patients automatically.
 
-**Note:** BigQuery is more efficient for large-scale filtering.
+### ECG Waveforms
 
----
+MIMIC-IV-ECG waveform files are required separately from the CSV tables above. Download them via one of the following methods:
 
-## Baseline Models
+**Option A — wget (recommended for servers/DSMLP):**
 
-### XGBoost Multi-Label Classifier
+```bash
+wget -r -N -c -np https://physionet.org/files/mimic-iv-ecg/1.0/
+```
 
-The XGBoost baseline uses gradient boosted decision trees with a multi-output approach. All three variants apply StandardScaler normalization to continuous ECG and vital features (fit on train only, applied to test). Three variants are provided:
+**Option B — ZIP download (33.8 GB):** available on the dataset page linked below.
 
-- **`--xgboost-base`** *(default when using `--all`)* — Best results (No class imbalancing handling)
-- **`--xgboost-weighted`** — Per-label `scale_pos_weight = n_negative / n_positive` to handle class imbalance
-- **`--xgboost-smote`** — SMOTE oversampling applied to labels with < 8% positive prevalence in the training set
+**Option C — Google BigQuery:** request waveform access through PhysioNet's BigQuery integration.
 
-> **Note:** `--xgboost-weighted` and `--xgboost-smote` are experimental variants retained for benchmarking. Empirically, both underperform the base variant on this dataset — weighted loss over-corrects on severely imbalanced labels, and SMOTE degrades performance due to the high proportion of binary features. The base variant is recommended for all downstream use.
+Full dataset page: https://physionet.org/content/mimic-iv-ecg/1.0/
 
-#### Model Configuration
-- **Algorithm:** XGBoost with MultiOutputClassifier wrapper
-- **Task:** Multi-label binary classification (cardiovascular diagnosis labels)
-- **Max Depth:** 5
-- **Learning Rate:** 0.1
-- **Estimators:** 100 trees per label
-- **Train/Test Split:** 80/20 stratified by patient (ensures no patient overlap)
-
-### MLP Baseline
-
-A feedforward neural network with three hidden layers (256 → 128 → 64), BatchNorm, Dropout, and BCEWithLogitsLoss with per-label positive weighting. Features are StandardScaler normalized (fit on train only) and early stopping is applied using a 10% validation split.
-
-#### Prediction Task
-
-**Diagnosis Prediction**
-- **Goal:** Predict cardiovascular ICD-10 diagnosis labels
-- **Input Features:**
-  - ECG machine measurements (`report_*` columns): rhythm findings, QT intervals, axis measurements
-  - Vital signs statistics: mean, std, min, max over 4-hour window before ECG
-  - Closest vitals to ECG time: temperature, heart rate, respiratory rate, O2 saturation, blood pressure
-  - Demographics: age, race, gender
-- **Output Labels:** Binary indicators for cardiovascular diagnosis codes (e.g., atrial fibrillation, heart failure, MI)
-
-#### Evaluation Metrics
-
-For each label, the model reports:
-- **ROC-AUC:** Area under receiver operating characteristic curve
-- **PR-AUC:** Area under precision-recall curve (important for imbalanced labels)
-- **Support:** Number of positive cases in test set
-
-Aggregated metrics across all labels:
-- **Confusion Matrix:** Sum of all label predictions
-- **Overall Accuracy, Precision, Recall, F1-Score:** Micro-averaged across labels
-
-#### Visualizations
-
-Three-panel evaluation plots:
-1. **ROC Curves:** All labels overlaid with color-coding by performance
-2. **Precision-Recall Curves:** All labels overlaid with color-coding
-3. **Aggregated Confusion Matrix:** Summed predictions across all labels
-
-Colors indicate performance tiers:
-- Dark blue: Excellent (ROC-AUC ≥ 0.95 or PR-AUC ≥ 0.7)
-- Purple: Good (ROC-AUC ≥ 0.85 or PR-AUC ≥ 0.3)
-- Red: Needs improvement (below thresholds)
+## Waveforms can be stored anywhere on your system however ensure the waveform path in `cardiotwin_params.json`, `CardioTwin_model_params.json`, `mlp_params.json`, and `xgboost_params.json` points to the waveform directory.
 
 ## Installation
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/brandonng2/ClinicalDigitalTwin.git
 cd ClinicalDigitalTwin
 ```
 
 ### 2. Create and Activate the Conda Environment
+
 ```bash
 conda env create -f environment.yml
 conda activate ClinicalDigitalTwin
 ```
 
 ### 3. Install ECG-FM
-ECG-FM is a foundation model for ECG analysis pre-trained on MIMIC-IV-ECG. Install it directly from GitHub:
+
+ECG-FM is a foundation model for ECG analysis pre-trained on MIMIC-IV-ECG. It depends on [fairseq-signals](https://github.com/Jwoo5/fairseq-signals), which must be installed from source. Run the following with the `ClinicalDigitalTwin` conda environment activated:
+
 ```bash
-pip install git+https://github.com/bowang-lab/ecg-fm.git
+git clone https://github.com/Jwoo5/fairseq-signals
+cd fairseq-signals
+pip install --editable ./
 ```
 
-For more details on ECG-FM and its usage, see the [ECG-FM repository](https://github.com/bowang-lab/ecg-fm).
+Then download the pretrained checkpoint from HuggingFace:
 
-### 4. Verify Data Placement
+https://huggingface.co/wanglab/ecg-fm/tree/main
 
-Ensure all required CSV files are in `data/raw/` before running preprocessing:
-- `admissions.csv`
-- `diagnoses_icd.csv`
-- `ed_diagnosis.csv`
-- `edstays.csv`
-- `icustays.csv`
-- `machine_measurements.csv`
-- `patients.csv`
-- `record_list.csv`
-- `ed_vitals.csv`
+Download `mimic_iv_ecg_physionet_pretrained.pt`, rename it to `ecgfm_pretrained.pt`, and place it at `src/models/ecgfm_pretrained.pt`.
+
+See the [ECG-FM repository](https://github.com/bowang-lab/ecg-fm) for further implementation details.
+
+---
+
+## CLI Quick Reference
+
+```bash
+# ── Full pipeline ────────────────────────────────────────────────────────────
+python run.py --all                      # all preprocessing + CardioTwin final model
+
+# ── Preprocessing ────────────────────────────────────────────────────────────
+python run.py --preprocess               # all four steps below in sequence
+python run.py --static                   # demographic and comorbidity features
+python run.py --ecg                      # ECG signal processing and feature extraction
+python run.py --vitals                   # ED vital sign time series processing
+python run.py --entities                 # cardiovascular ICD-10 label extraction
+
+# ── XGBoost ──────────────────────────────────────────────────────────────────
+python run.py --xgboost-baseline         # normalized, no imbalance handling (best)
+python run.py --xgboost-weighted         # per-label scale_pos_weight
+python run.py --xgboost-smote            # capped SMOTE on rare labels
+python run.py --xgboost-embedding        # ECG-FM 1536-dim embeddings
+python run.py --xgboost-ablation         # all four variants in sequence
+
+# ── MLP ──────────────────────────────────────────────────────────────────────
+python run.py --mlp-baseline             # uniform BCE, no imbalance handling
+python run.py --mlp-weighted             # per-label BCEWithLogitsLoss pos_weight
+python run.py --mlp-smote                # capped SMOTE on rare labels
+python run.py --mlp-embedding            # ECG-FM 1536-dim embeddings
+python run.py --mlp-embedding-weighted   # ECG-FM embeddings + pos_weight
+python run.py --mlp-ablation             # all five variants in sequence
+
+# ── CardioTwin ───────────────────────────────────────────────────────────────
+python run.py --cardiotwin               # final model: 128-dim, gated fusion, BCE, no sampler
+python run.py --cardiotwin-ablation      # 4 variants x 3 loss types x 2 samplers = 24 runs
+```
+
+---
 
 ## Usage
 
-### Running the Preprocessing Pipeline
+### Preprocessing
 
-The pipeline supports modular execution of preprocessing steps. You can run all steps or specific components:
+Each step reads its configuration from the corresponding JSON in `configs/` and writes processed files to `data/processed/`.
+
 ```bash
-# Run all preprocessing steps
-python run.py --all
-
-# Run specific steps
-python run.py --static
-python run.py --ecg
-python run.py --vitals
-python run.py --entities
-
-# Run multiple specific steps
-python run.py --static --ecg --vitals
-
-# Run everything except certain steps
-python run.py --all --skip-static
-python run.py --all --skip-ecg
+python run.py --static      # static/column-based MIMIC-IV tables
+python run.py --ecg         # WFDB ECG signal processing
+python run.py --vitals      # ED vital sign time series
+python run.py --entities    # ICD-10 cardiovascular label extraction
+python run.py --preprocess  # all four steps above
 ```
 
-#### Pipeline Components
+### XGBoost Models
 
-- **Static preprocessing (`--static`):** Demographic, comorbidity, and baseline features from admissions and patient data
-- **ECG preprocessing (`--ecg`):** ECG signal processing and feature extraction
-- **Vitals preprocessing (`--vitals`):** Time-series vital signs data processing
-- **ICD code extraction (`--entities`):** Extracting cardiovascular clinical labels from ICD-10 diagnosis codes
+All variants apply StandardScaler normalization fit on the training set only. Running `--xgboost-ablation` sequences all four and upserts results into the top-level ablation CSVs after each run.
 
-Each step reads its configuration from the corresponding JSON file in `configs/`:
-- `static_preprocessing_params.json`
-- `ecg_preprocessing_params.json`
-- `vitals_preprocessing_params.json`
-- `icdcode_extractor_params.json`
+| Flag                  | Description                                                   |
+| --------------------- | ------------------------------------------------------------- |
+| `--xgboost-baseline`  | No imbalance handling — best overall results                  |
+| `--xgboost-weighted`  | Per-label `scale_pos_weight = n_neg / n_pos`                  |
+| `--xgboost-smote`     | Capped SMOTE (max 15% prevalence per label)                   |
+| `--xgboost-embedding` | Replaces derived ECG features with ECG-FM 1536-dim embeddings |
+| `--xgboost-ablation`  | Runs all four above in sequence                               |
+
+> `--xgboost-weighted` and `--xgboost-smote` are retained for benchmarking. Both underperform the baseline on this dataset — weighted loss over-corrects on severely imbalanced labels, and SMOTE degrades performance due to the high proportion of binary features.
+
+### MLP Models
+
+Feedforward network (256 → 128 → 64) with BatchNorm, Dropout, and BCEWithLogitsLoss. Features are StandardScaler normalized; early stopping uses a 10% validation split.
+
+| Flag                       | Description                                    |
+| -------------------------- | ---------------------------------------------- |
+| `--mlp-baseline`           | Uniform BCE, no imbalance handling             |
+| `--mlp-weighted`           | Per-label `pos_weight`                         |
+| `--mlp-smote`              | Capped SMOTE on rare labels                    |
+| `--mlp-embedding`          | ECG-FM 1536-dim embeddings as additional input |
+| `--mlp-embedding-weighted` | ECG-FM embeddings + per-label `pos_weight`     |
+| `--mlp-ablation`           | Runs all five above in sequence                |
+
+### CardioTwin
+
+```bash
+# Final model — same as the model step in --all
+python run.py --cardiotwin
+
+# Full ablation sweep
+# Variants:    baseline (enc=128, gated), nogate (enc=128, mean-pool),
+#              medium (enc=256), large (enc=512)
+# Loss types:  bce, bce_weighted, focal
+# Samplers:    none, weighted (WeightedRandomSampler on rare-label stays)
+python run.py --cardiotwin-ablation
+```
 
 ---
 
-### Running the Baseline Models
+## Models
 
-After preprocessing, train baseline models for multi-label cardiovascular diagnosis prediction:
+### XGBoost
 
-```bash
-# XGBoost — base (best results) — default when using --all
-python run.py --xgboost-base
+Gradient boosted decision trees with a `MultiOutputClassifier` wrapper — one `XGBClassifier` per label. Inputs: ECG machine measurements, vital sign statistics over a 4-hour pre-ECG window, and patient demographics. Max depth 5, learning rate 0.1, 100 estimators per label, 80/20 patient-stratified split.
 
-# XGBoost — Per-label class-weighted loss
-python run.py --xgboost-weighted
+### MLP
 
-# XGBoost — SMOTE on labels with < 8% prevalence
-python run.py --xgboost-smote
+Three hidden layers (256 → 128 → 64) with BatchNorm, Dropout, and BCEWithLogitsLoss. Same input feature set as XGBoost. Embedding variants replace or augment derived ECG features with ECG-FM 1536-dim pooled embeddings (two half-segment encodings concatenated).
 
-# Train MLP baseline
-python run.py --mlpbaseline
-```
+### CardioTwin (Final Model)
 
-> **Note:** When running `python run.py --all`, only the base (normalized) XGBoost variant runs by default. Use `--skip-xgboost-base` to skip it, or invoke the weighted/SMOTE variants explicitly.
+A multimodal gated fusion network with three parallel input streams:
 
-### Model Output Files
+| Stream                    | Encoder                                           | Output Dim |
+| ------------------------- | ------------------------------------------------- | ---------- |
+| Vital signs (time series) | LSTM + statistics MLP, fused                      | 128        |
+| ECG-FM embeddings         | Attention pool over up to 2 ECGs + projection MLP | 128        |
+| EHR / demographics        | Shallow MLP                                       | 128        |
 
-All model outputs are saved to `data/model_results/`. Filenames are prefixed by model variant:
+A learned gate network produces per-patient soft weights over the three 128-dim encodings. The weighted sum passes through a fusion MLP (128 → 256 → 128) to a diagnosis head (128 → 17 sigmoid logits). Gate weights are saved per patient and interpretable as modality importance scores.
 
-- `xgboost_base_results.csv` — Per-label performance metrics (ROC-AUC, PR-AUC, support)
-- `xgboost_base_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
-- `xgboost_base_label_confusion_matrix.png` — Label co-occurrence matrix
+**Ablation dimensions:**
 
-The same pattern applies for `xgboost_weighted_*` and `xgboost_smote_*` outputs.
+| Dimension    | Options                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| Architecture | `baseline` (enc=128, gated), `nogate` (enc=128, mean-pool), `medium` (enc=256), `large` (enc=512) |
+| Loss         | `bce`, `bce_weighted` (pos_weight), `focal`                                                       |
+| Sampler      | `none`, `weighted` (WeightedRandomSampler on rare-label stays)                                    |
 
-- `mlp_diagnosis_results.csv` — Per-label MLP performance metrics
-- `mlp_diagnosis_evaluation_plots.png` — ROC curves, PR curves, and aggregated confusion matrix
-- `mlp_diagnosis_label_confusion_matrix.png` — Label co-occurrence matrix
 ---
 
-### Exploratory Analysis
+## Evaluation
 
-Use the notebooks in `notebooks/` to explore data distributions and quality and test preprocessing functions before running the full pipeline.
+All models produce the following outputs per variant under `model_results/{family}/{variant}/`:
+
+- **Per-label results CSV** — ROC-AUC, PR-AUC, precision, recall, F1, accuracy for each of the 17 diagnosis labels
+- **Overall results CSV** — Aggregate metrics across all labels
+- **ROC curves** — All 17 labels overlaid, color-coded by performance tier
+- **PR curves** — All 17 labels overlaid, color-coded by performance tier
+- **Confusion matrix** — Summed binary predictions across all labels
+- **Co-occurrence matrix** — Which labels does the model predict together?
+
+After each run, a row is upserted into the top-level ablation CSVs (`{family}_overall_results_ablation.csv` and `{family}_results_ablation.csv`) so all variants can be compared side by side.
+
+---
 
 ## Citations
 
-When using this project, please cite all relevant MIMIC-IV datasets:
-
 ### ECG-FM
+
 ```
-McKeen, S., Patel, N., Girgis, H., Emam, T., Cianflone, N., Tsang, T., Gibson, W., 
-McIntyre, W., Rayner-Kay, H., & Wang, B. (2024). ECG-FM: An Open Electrocardiogram 
+McKeen, S., Patel, N., Girgis, H., Emam, T., Cianflone, N., Tsang, T., Gibson, W.,
+McIntyre, W., Rayner-Kay, H., & Wang, B. (2024). ECG-FM: An Open Electrocardiogram
 Foundation Model. arXiv preprint arXiv:2408.05178.
 https://github.com/bowang-lab/ecg-fm
 ```
 
-### MIMIC-IV (Core Hospital Data)
+### MIMIC-IV
+
 ```
-Johnson, A., Bulgarelli, L., Pollard, T., Gow, B., Moody, B., Horng, S., 
-Celi, L. A., & Mark, R. (2024). MIMIC-IV (version 3.1). PhysioNet. 
+Johnson, A., Bulgarelli, L., Pollard, T., Gow, B., Moody, B., Horng, S.,
+Celi, L. A., & Mark, R. (2024). MIMIC-IV (version 3.1). PhysioNet.
 https://doi.org/10.13026/kpb9-mt58
 ```
 
 ### MIMIC-IV-ECG
+
 ```
-Gow, B., Pollard, T., Nathanson, L. A., Johnson, A., Moody, B., Fernandes, C., 
-Greenbaum, N., Waks, J. W., Eslami, P., Carbonati, T., Berkowitz, S., Moukheiber, D., 
-Chiu, E., Rosman, J., Ghassemi, M. M., Horng, S., Celi, L. A., & Mark, R. (2023). 
-MIMIC-IV-ECG: Diagnostic Electrocardiogram Matched Subset (version 1.0). PhysioNet. 
+Gow, B., Pollard, T., Nathanson, L. A., Johnson, A., Moody, B., Fernandes, C.,
+Greenbaum, N., Waks, J. W., Eslami, P., Carbonati, T., Berkowitz, S., Moukheiber, D.,
+Chiu, E., Rosman, J., Ghassemi, M. M., Horng, S., Celi, L. A., & Mark, R. (2023).
+MIMIC-IV-ECG: Diagnostic Electrocardiogram Matched Subset (version 1.0). PhysioNet.
 https://doi.org/10.13026/6mm1-ek67
 ```
 
 ### MIMIC-IV-ED
+
 ```
-Gaichies, E., Jang, J., Aczon, M., Leu, M., Garcia, J., Rodricks, J., Girkar, U., 
-Murray, H., Brenner, L., Hamilton, P., Alpern, E., Moody, B., Pollard, T., 
-Johnson, A. E. W., Celi, L. A., Mark, R. G., & Badawi, O. (2024). MIMIC-IV-ED 
+Gaichies, E., Jang, J., Aczon, M., Leu, M., Garcia, J., Rodricks, J., Girkar, U.,
+Murray, H., Brenner, L., Hamilton, P., Alpern, E., Moody, B., Pollard, T.,
+Johnson, A. E. W., Celi, L. A., Mark, R. G., & Badawi, O. (2024). MIMIC-IV-ED
 (version 2.2). PhysioNet. https://doi.org/10.13026/77mm-fy28
 ```
 
 ### Original MIMIC-IV Publication
+
 ```
-Johnson, A.E.W., Bulgarelli, L., Shen, L. et al. MIMIC-IV, a freely accessible 
-electronic health record dataset. Sci Data 10, 1 (2023). 
+Johnson, A.E.W., Bulgarelli, L., Shen, L. et al. MIMIC-IV, a freely accessible
+electronic health record dataset. Sci Data 10, 1 (2023).
 https://doi.org/10.1038/s41597-022-01899-x
 ```
 
 ### PhysioNet
+
 ```
-Goldberger, A., Amaral, L., Glass, L., et al. (2000). PhysioBank, PhysioToolkit, 
-and PhysioNet: Components of a new research resource for complex physiologic signals. 
+Goldberger, A., Amaral, L., Glass, L., et al. (2000). PhysioBank, PhysioToolkit,
+and PhysioNet: Components of a new research resource for complex physiologic signals.
 Circulation, 101(23), e215–e220.
 ```
 
+---
+
 ## License
 
-This project uses data from multiple MIMIC-IV datasets, all licensed under the **PhysioNet Credentialed Health Data License v1.5.0**.
-
-By using this repository, you agree to:
+This project uses data from multiple MIMIC-IV datasets, all licensed under the **PhysioNet Credentialed Health Data License v1.5.0**. By using this repository, you agree to:
 
 - Comply with all PhysioNet data use agreements
 - Follow institutional or IRB requirements for de-identified patient data
-- Use data for **research and educational purposes only** (no commercial use)
+- Use data for research and educational purposes only (no commercial use)
 - Not attempt to identify individuals or institutions in the data
 - Not share access to the data with unauthorized parties
 - Maintain appropriate data security measures
 
-**All Data Use Agreement:** [PhysioNet Credentialed Health Data Use Agreement](https://physionet.org/content/mimiciv/view-dua/3.1/)
+**Data Use Agreement:** https://physionet.org/content/mimiciv/view-dua/3.1/
+**Full License:** https://physionet.org/content/mimiciv/view-license/3.1/
 
-**Full License:** [PhysioNet Credentialed Health Data License](https://physionet.org/content/mimiciv/view-license/3.1/)
+---
 
 ## Acknowledgments
 

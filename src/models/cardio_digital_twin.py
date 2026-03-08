@@ -1,5 +1,4 @@
 # =============================================================================
-# cardio_digital_twin.py
 # CardioTwinED model variants and the main pipeline runner.
 #
 # SEQUENTIAL TUNING VARIANTS (active — run by default)
@@ -222,45 +221,34 @@ class CardioTwinED_Large(CardioTwinED):
 # MODEL REGISTRY
 # =============================================================================
 
-# --- Active variants for sequential tuning ---
-# Add/remove entries here to control which models run in the pipeline.
-VARIANTS = {
+# All known variants — referenced by name in pipeline calls.
+_ALL_VARIANTS = {
     "cardio_digital_twin_baseline": (CardioTwinED_Baseline, 128),
-    # "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
+    "cardio_digital_twin_nogate":   (CardioTwinED_NoGate,   128),
+    "cardio_digital_twin_medium":   (CardioTwinED_Medium,   256),
+    "cardio_digital_twin_large":    (CardioTwinED_Large,    512),
 }
-
-# --- Held-out size variants (re-enable after gated vs no-gate tuning) ---
-# VARIANTS.update({
-#     "cardio_digital_twin_medium": (CardioTwinED_Medium, 256),
-#     "cardio_digital_twin_large":  (CardioTwinED_Large,  512),
-# })
-
-# --- Loss function variants to run for each model ---
-# All three are active by default for the full ablation sweep.
-# Comment out entries to skip specific combinations.
-LOSS_TYPES = [
-    "bce",
-    "bce_weighted",
-    "focal",
-]
-
-# --- Sampler variants to run for each (model, loss) combination ---
-# "none"     — standard shuffle=True DataLoader (default)
-# "weighted" — WeightedRandomSampler: rare-label stays appear more per epoch
-#
-# Stacking "weighted" sampler with "focal" loss gives the strongest signal
-# for very rare labels (e.g. pericardial_disease_tamponade, ami_stemi).
-# Each entry produces a separate run: {model_name}_{loss_type}_{sampler_type}/
-SAMPLER_TYPES = [
-    # "none",
-    "weighted",
-]
 
 _LOSS_TRAINERS = {
     "bce":          train_cardiotwin_model_bce,
-     "bce_weighted": train_cardiotwin_model_bce_weighted,
-     "focal":        train_cardiotwin_model_focal,
+    "bce_weighted": train_cardiotwin_model_bce_weighted,
+    "focal":        train_cardiotwin_model_focal,
 }
+
+# Default sets used when callers don't specify
+_DEFAULT_VARIANTS      = {"cardio_digital_twin_baseline": _ALL_VARIANTS["cardio_digital_twin_baseline"]}
+_DEFAULT_LOSS_TYPES    = ["bce"]
+_DEFAULT_SAMPLER_TYPES = ["none"]
+
+# Full ablation sets
+_ABLATION_VARIANTS = {
+    "cardio_digital_twin_baseline": _ALL_VARIANTS["cardio_digital_twin_baseline"],
+    "cardio_digital_twin_nogate":   _ALL_VARIANTS["cardio_digital_twin_nogate"],
+    "cardio_digital_twin_medium":   _ALL_VARIANTS["cardio_digital_twin_medium"],
+    "cardio_digital_twin_large":    _ALL_VARIANTS["cardio_digital_twin_large"],
+}
+_ABLATION_LOSS_TYPES    = ["bce", "bce_weighted", "focal"]
+_ABLATION_SAMPLER_TYPES = ["none", "weighted"]
 
 
 def _build_model(actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
@@ -283,9 +271,22 @@ def _build_model(actual_vital_stat, actual_vital_dim, ehr_dim, ecg_fm_dim,
 # MAIN PIPELINE
 # =============================================================================
 
-def run_cardiotwin_pipeline(in_dir, config_path, out_path):
+def run_cardiotwin_pipeline(
+    in_dir,
+    config_path,
+    out_path,
+    variants=None,
+    loss_types=None,
+    sampler_types=None,
+):
     """
-    Full CardioTwin pipeline: trains all active VARIANTS x LOSS_TYPES combinations.
+    Full CardioTwin pipeline: trains the specified VARIANTS x LOSS_TYPES x SAMPLER_TYPES.
+
+    Defaults to the single baseline configuration (enc_dim=128, BCE, no sampler)
+    when called with no overrides — i.e. the main pipeline entry point.
+
+    For the full ablation sweep, use run_cardiotwin_ablation_pipeline() which
+    passes all variants, all loss types, and both sampler modes.
 
     Shared data loading (steps 1-9) runs once. Each (variant, loss) pair then
     trains, logs k-fold curves, evaluates, and generates trajectory plots.
@@ -303,7 +304,11 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     """
     from src.models.tabular_utils import load_config
 
-    n_combos = len(VARIANTS) * len(LOSS_TYPES) * len(SAMPLER_TYPES)
+    variants      = variants      or _DEFAULT_VARIANTS
+    loss_types    = loss_types    or _DEFAULT_LOSS_TYPES
+    sampler_types = sampler_types or _DEFAULT_SAMPLER_TYPES
+
+    n_combos = len(variants) * len(loss_types) * len(sampler_types)
     data_steps = [
         "Loading configuration & data",
         "Filtering ED encounters & ECG records",
@@ -317,9 +322,9 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
     ]
     train_steps = [
         f"Training {mname} [{lt}] [sampler={st}]"
-        for mname in VARIANTS
-        for lt in LOSS_TYPES
-        for st in SAMPLER_TYPES
+        for mname in variants
+        for lt in loss_types
+        for st in sampler_types
     ]
     steps = data_steps + train_steps
 
@@ -426,9 +431,9 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
         pbar.update(1)
 
         # Train each variant x loss x sampler combination
-        for model_name, (variant_cls, enc_dim) in VARIANTS.items():
-            for loss_type in LOSS_TYPES:
-                for sampler_type in SAMPLER_TYPES:
+        for model_name, (variant_cls, enc_dim) in variants.items():
+            for loss_type in loss_types:
+                for sampler_type in sampler_types:
                     run_name = f"{model_name}_{loss_type}_{sampler_type}"
                     pbar.set_description(f"Training {model_name} [{loss_type}] [sampler={sampler_type}]")
 
@@ -500,3 +505,28 @@ def run_cardiotwin_pipeline(in_dir, config_path, out_path):
 
     log.info("Cardio Digital Twin pipeline complete.")
     return None
+
+# =============================================================================
+# PUBLIC ABLATION ENTRY POINT
+# =============================================================================
+
+def run_cardiotwin_ablation_pipeline(in_dir, config_path, out_path):
+    """
+    Full CardioTwin ablation sweep.
+
+    Runs ALL variants x ALL loss types x ALL sampler types:
+      Variants  : baseline (128), nogate (128), medium (256), large (512)
+      Loss types: bce, bce_weighted, focal
+      Samplers  : none, weighted
+
+    Total combinations: 4 x 3 x 2 = 24 runs.
+    Each run outputs under out_path/{model_name}_{loss_type}_{sampler_type}/.
+    """
+    return run_cardiotwin_pipeline(
+        in_dir,
+        config_path,
+        out_path,
+        variants=_ABLATION_VARIANTS,
+        loss_types=_ABLATION_LOSS_TYPES,
+        sampler_types=_ABLATION_SAMPLER_TYPES,
+    )

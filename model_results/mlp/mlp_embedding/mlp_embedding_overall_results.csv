@@ -1,0 +1,2 @@
+mean_roc_auc,mean_pr_auc,accuracy,precision,recall,f1
+0.922,0.259,0.975,0.731,0.407,0.523

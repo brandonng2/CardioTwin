@@ -641,18 +641,43 @@ def evaluate_and_visualize_cardiotwin(
     results_df = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
     results_df.to_csv(out_dir / f"{model_name}_results.csv", index=False)
 
-    # --- Overall results CSV ---
+    # --- Overall results CSV (per-variant) ---
     y_true_flat = y_true.ravel()
     y_pred_bin_flat = y_pred_bin.ravel()
-    overall_df = pd.DataFrame([{
+    overall_row = {
+        "model_type": model_name,
         "mean_roc_auc": results_df["roc_auc"].mean(),
-        "mean_pr_auc":  results_df["pr_auc"].mean(),
-        "accuracy":     accuracy_score(y_true_flat, y_pred_bin_flat),
-        "precision":    precision_score(y_true_flat, y_pred_bin_flat, zero_division=0),
-        "recall":       recall_score(y_true_flat, y_pred_bin_flat, zero_division=0),
-        "f1":           f1_score(y_true_flat, y_pred_bin_flat, zero_division=0),
-    }])
+        "mean_pr_auc": results_df["pr_auc"].mean(),
+        "accuracy": accuracy_score(y_true_flat, y_pred_bin_flat),
+        "precision": precision_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+        "recall": recall_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+        "f1": f1_score(y_true_flat, y_pred_bin_flat, zero_division=0),
+    }
+    overall_df = pd.DataFrame([overall_row])
     overall_df.to_csv(out_dir / f"{model_name}_overall_results.csv", index=False)
+
+    # --- Append row to top-level overall ablation CSV ---
+    folder_prefix = Path(out_path).name
+    overall_ablation_path = Path(out_path) / f"{folder_prefix}_overall_results_ablation.csv"
+    if overall_ablation_path.exists():
+        overall_ablation_df = pd.read_csv(overall_ablation_path)
+        overall_ablation_df = overall_ablation_df[overall_ablation_df["model_type"] != model_name]
+        overall_ablation_df = pd.concat([overall_ablation_df, overall_df], ignore_index=True)
+    else:
+        overall_ablation_df = overall_df
+    overall_ablation_df.to_csv(overall_ablation_path, index=False)
+
+    # --- Append per-label rows to top-level result ablation CSV ---
+    label_ablation_path = Path(out_path) / f"{folder_prefix}_results_ablation.csv"
+    label_rows = results_df.copy()
+    label_rows.insert(0, "model_type", model_name)
+    if label_ablation_path.exists():
+        label_ablation_df = pd.read_csv(label_ablation_path)
+        label_ablation_df = label_ablation_df[label_ablation_df["model_type"] != model_name]
+        label_ablation_df = pd.concat([label_ablation_df, label_rows], ignore_index=True)
+    else:
+        label_ablation_df = label_rows
+    label_ablation_df.to_csv(label_ablation_path, index=False)
 
     # --- ROC curves ---
     mean_auc = results_df["roc_auc"].mean()
