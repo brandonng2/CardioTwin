@@ -165,9 +165,24 @@ def create_model_df(ed_encounters, ecg_aggregate_vitals):
     merge_keys = ["subject_id", "ed_stay_id", "hadm_id", "icu_stay_id"]
     for key in merge_keys:
         ecg_aggregate_vitals[key] = pd.to_numeric(ecg_aggregate_vitals[key], errors="coerce").astype("Int64")
-        ed_encounters[key]         = pd.to_numeric(ed_encounters[key], errors="coerce").astype("Int64")
+        ed_encounters[key] = pd.to_numeric(ed_encounters[key], errors="coerce").astype("Int64")
 
-    return ecg_aggregate_vitals.merge(ed_encounters, on=merge_keys, how="inner")
+    model_df = ecg_aggregate_vitals.merge(ed_encounters, on=merge_keys, how="inner")
+
+    # Build binary label columns from pre-computed diagnosis_labels
+    def parse_labels(val):
+        if pd.isna(val) or val == "[]":
+            return []
+        try:
+            return ast.literal_eval(val) if isinstance(val, str) else list(val)
+        except Exception:
+            return []
+
+    parsed = model_df["diagnosis_labels"].apply(parse_labels)
+    for col in cardiovascular_labels.keys():
+        model_df[col] = parsed.apply(lambda lbls: 1.0 if col in lbls else 0.0).astype(np.float32)
+
+    return model_df
 
 
 def onehot_labels(df, label_column="labels", prefix="label_"):
@@ -376,12 +391,17 @@ def evaluate_and_visualize_multilabel_model(
             auc = np.nan
             ap  = np.nan
 
+        y_pred_bin = multi_xgb.estimators_[i].predict(X_test)
         results.append({
-            "target":    target,
+            "target":     target,
             "n_test_pos": int(n_pos_test),
-            "pos_rate":  y_test[target].mean(),
-            "roc_auc":   auc,
-            "pr_auc":    ap,
+            "pos_rate":   y_test[target].mean(),
+            "roc_auc":    auc,
+            "pr_auc":     ap,
+            "precision":  precision_score(y_test[target], y_pred_bin, zero_division=0),
+            "recall":     recall_score(y_test[target], y_pred_bin, zero_division=0),
+            "f1":         f1_score(y_test[target], y_pred_bin, zero_division=0),
+            "accuracy":   accuracy_score(y_test[target], y_pred_bin),
         })
 
     results_df   = pd.DataFrame(results).sort_values("pr_auc", ascending=False)
@@ -538,5 +558,45 @@ def evaluate_and_visualize_multilabel_model(
     csv_path = Path(out_path) / model_name / f"{model_name}_results.csv"
     results_df.to_csv(csv_path, index=False)
     print(f"\nResults saved to '{csv_path}'")
+
+    # --- Overall results CSV (per-variant) ---
+    overall_row = {
+        "model_type": model_name,
+        "mean_roc_auc": results_df["roc_auc"].mean(),
+        "mean_pr_auc": results_df["pr_auc"].mean(),
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+    overall_df = pd.DataFrame([overall_row])
+    overall_path = Path(out_path) / model_name / f"{model_name}_overall_results.csv"
+    overall_df.to_csv(overall_path, index=False)
+    print(f"Overall results saved to '{overall_path}'")
+
+    # --- Append row to top-level overall ablation CSV ---
+    folder_prefix = Path(out_path).name
+    ablation_path = Path(out_path) / f"{folder_prefix}_overall_results_ablation.csv"
+    if ablation_path.exists():
+        ablation_df = pd.read_csv(ablation_path)
+        ablation_df = ablation_df[ablation_df["model_type"] != model_name]
+        ablation_df = pd.concat([ablation_df, overall_df], ignore_index=True)
+    else:
+        ablation_df = overall_df
+    ablation_df.to_csv(ablation_path, index=False)
+    print(f"Ablation row appended to '{ablation_path}'")
+
+    # --- Append per-label rows to top-level result ablation CSV ---
+    label_ablation_path = Path(out_path) / f"{folder_prefix}_results_ablation.csv"
+    label_rows = results_df.copy()
+    label_rows.insert(0, "model_type", model_name)
+    if label_ablation_path.exists():
+        label_ablation_df = pd.read_csv(label_ablation_path)
+        label_ablation_df = label_ablation_df[label_ablation_df["model_type"] != model_name]
+        label_ablation_df = pd.concat([label_ablation_df, label_rows], ignore_index=True)
+    else:
+        label_ablation_df = label_rows
+    label_ablation_df.to_csv(label_ablation_path, index=False)
+    print(f"Per-label ablation rows appended to '{label_ablation_path}'")
 
     return results_df
