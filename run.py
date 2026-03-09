@@ -25,7 +25,6 @@ from src.models.mlp import (
 from src.models.CardioTwin import run_cardiotwin_final
 
 from src.models.cardio_digital_twin import (
-    run_cardiotwin_pipeline,
     run_cardiotwin_ablation_pipeline,
 )
 
@@ -313,39 +312,39 @@ Examples:
         "--preprocess", action="store_true",
         help="Run all preprocessing steps (static, ECG, vitals, entities)",
     )
-    parser.add_argument("--static",   action="store_true", help="Run static preprocessing")
-    parser.add_argument("--ecg",      action="store_true", help="Run ECG preprocessing")
-    parser.add_argument("--vitals",   action="store_true", help="Run vitals preprocessing")
+    parser.add_argument("--static", action="store_true", help="Run static preprocessing")
+    parser.add_argument("--ecg", action="store_true", help="Run ECG preprocessing")
+    parser.add_argument("--vitals", action="store_true", help="Run vitals preprocessing")
     parser.add_argument("--entities", action="store_true", help="Run ICD entity extraction")
 
     # -----------------------------------------------------------------
     # XGBoost
     # -----------------------------------------------------------------
-    parser.add_argument("--xgboost-baseline",  action="store_true", dest="xgb_base",
+    parser.add_argument("--xgboost-baseline", action="store_true", dest="xgb_base",
                         help="XGBoost baseline (normalized, no weighting)")
-    parser.add_argument("--xgboost-weighted",  action="store_true", dest="xgb_weighted",
+    parser.add_argument("--xgboost-weighted", action="store_true", dest="xgb_weighted",
                         help="XGBoost with per-label scale_pos_weight")
-    parser.add_argument("--xgboost-smote",     action="store_true", dest="xgb_smote",
+    parser.add_argument("--xgboost-smote", action="store_true", dest="xgb_smote",
                         help="XGBoost with capped SMOTE on rare labels")
     parser.add_argument("--xgboost-embedding", action="store_true", dest="xgb_embedding",
                         help="XGBoost with ECG-FM 1536-dim embeddings")
-    parser.add_argument("--xgboost-ablation",  action="store_true", dest="xgb_ablation",
+    parser.add_argument("--xgboost-ablation", action="store_true", dest="xgb_ablation",
                         help="Run all XGBoost variants in sequence")
 
     # -----------------------------------------------------------------
     # MLP
     # -----------------------------------------------------------------
-    parser.add_argument("--mlp-baseline",          action="store_true", dest="mlp_baseline",
+    parser.add_argument("--mlp-baseline", action="store_true", dest="mlp_baseline",
                         help="MLP baseline (normalized, uniform BCE)")
-    parser.add_argument("--mlp-weighted",          action="store_true", dest="mlp_weighted",
+    parser.add_argument("--mlp-weighted", action="store_true", dest="mlp_weighted",
                         help="MLP with per-label pos_weight")
-    parser.add_argument("--mlp-smote",             action="store_true", dest="mlp_smote",
+    parser.add_argument("--mlp-smote", action="store_true", dest="mlp_smote",
                         help="MLP with capped SMOTE on rare labels")
-    parser.add_argument("--mlp-embedding",         action="store_true", dest="mlp_embedding",
+    parser.add_argument("--mlp-embedding", action="store_true", dest="mlp_embedding",
                         help="MLP with ECG-FM 1536-dim embeddings")
     parser.add_argument("--mlp-embedding-weighted", action="store_true", dest="mlp_embedding_weighted",
                         help="MLP with ECG-FM embeddings + pos_weight")
-    parser.add_argument("--mlp-ablation",          action="store_true", dest="mlp_ablation",
+    parser.add_argument("--mlp-ablation", action="store_true", dest="mlp_ablation",
                         help="Run all MLP variants in sequence")
 
     # -----------------------------------------------------------------

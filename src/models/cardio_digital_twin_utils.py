@@ -392,10 +392,6 @@ def train_cardiotwin_model(
     params: dict, out_path: str, device, model_name: str = "cardio_digital_twin_baseline"
 ) -> tuple:
     """Train CardioTwinED with early stopping. Returns (model, test_auc, per_label_aucs)."""
-    # Weighted BCE (re-enable to up-weight rare labels):
-    # criterion = nn.BCEWithLogitsLoss(
-    #     pos_weight=compute_class_weights(train_loader.dataset.labels).to(device)
-    # )
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=params["learning_rate"], weight_decay=params["weight_decay"]
@@ -487,12 +483,6 @@ def simulate_trajectory(model, patient_vitals_raw, ecg_embs, ehr_x,
     Simulate evolving cardiovascular state across an ED stay.
     At each timestep t, recomputes vital_feats from window [0:t] and feeds
     the LSTM only t steps. ECG and EHR stay constant throughout.
-
-    patient_vitals_raw : np.array (T, n_vitals)
-    ecg_embs           : np.array (N, ecg_fm_dim)
-    ehr_x              : np.array (ehr_dim,)
-
-    Returns list of dicts: {timestep, probs (n_labels,), gates (3,), latent}
     """
     model.eval()
     T = len(patient_vitals_raw)
@@ -802,10 +792,6 @@ def plot_kfold_loss_curves_cardiotwin(
         val_loader = val_loader_fn(fold_idx)
 
         model = model_fn()
-        # Weighted BCE (re-enable to up-weight rare labels):
-        # criterion = nn.BCEWithLogitsLoss(
-        #     pos_weight=compute_class_weights(train_loader.dataset.labels).to(device)
-        # )
         criterion = nn.BCEWithLogitsLoss()
         optimizer = torch.optim.AdamW(model.parameters(), lr=params["learning_rate"],
                                       weight_decay=params["weight_decay"])
@@ -1048,8 +1034,6 @@ def _run_trajectories(model, test_ids, test_seqs, test_ehr, ecg_dict,
         and len(test_seqs[(sid, stay_id)]) >= min_steps
     ][:n_samples]
 
-    # Bug 6: build O(1) lookup — test_ids.index() is O(n) and returns wrong row
-    # if test_ids was filtered after test_ehr was built
     test_id_to_row = {(sid, stay): i for i, (sid, stay) in enumerate(test_ids)}
 
     for sid, stay_id in candidates:
