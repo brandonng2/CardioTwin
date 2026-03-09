@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════
 // CardioTwin Results Dashboard — results.js
+// Fully responsive via ResizeObserver
 // ═══════════════════════════════════════════════
 (function () {
   const MODELS = [
@@ -82,7 +83,6 @@
     });
   }
 
-  // show spinner text in each SVG before data loads
   function setLoading(msg) {
     ["res-bar-chart", "res-radar-chart", "res-heatmap"].forEach((id) => {
       const el = document.getElementById(id);
@@ -93,13 +93,12 @@
     });
   }
 
-  // completely wipe SVG content so loading text doesn't persist
   function clearSVG(id) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = "";
   }
 
-  setLoading("Loading data…");
+  setLoading("Loading data\u2026");
 
   Promise.all([
     fetch(CSV_OVERALL).then((r) => {
@@ -119,20 +118,16 @@
         MODEL_KEYS.includes(d.model_type),
       );
       const TARGETS = [...new Set(perTarget.map((d) => d.target))];
-
-      // clear loading placeholders before drawing
       clearSVG("res-bar-chart");
       clearSVG("res-radar-chart");
       clearSVG("res-heatmap");
-
       init(overall, perTarget, TARGETS);
     })
     .catch((err) => {
-      setLoading(`Failed to load CSV (${err.message})`);
+      setLoading("Failed to load CSV (" + err.message + ")");
       console.error("CardioTwin dashboard: CSV fetch error", err);
     });
 
-  // ── MAIN INIT ────────────────────────────────────
   function init(overall, perTarget, TARGETS) {
     // TOOLTIP
     const tip = document.createElement("div");
@@ -154,53 +149,72 @@
 
     function makeTip(key, row, subtitle) {
       const m = modelOf(key);
-      return `
-        <div class="res-tip-title" style="color:${m.color}">${m.label}</div>
-        ${subtitle ? `<div style="color:#86868b;font-size:11px;margin-bottom:5px">${subtitle}</div>` : ""}
-        <div class="res-tip-row"><span class="res-tip-label">ROC-AUC</span><span class="res-tip-val">${(row.mean_roc_auc ?? row.roc_auc ?? 0).toFixed(3)}</span></div>
-        <div class="res-tip-row"><span class="res-tip-label">PR-AUC</span><span class="res-tip-val">${(row.mean_pr_auc ?? row.pr_auc ?? 0).toFixed(3)}</span></div>
-        <div class="res-tip-row"><span class="res-tip-label">F1</span><span class="res-tip-val">${(row.f1 ?? 0).toFixed(3)}</span></div>
-        <div class="res-tip-row"><span class="res-tip-label">Precision</span><span class="res-tip-val">${(row.precision ?? 0).toFixed(3)}</span></div>
-        <div class="res-tip-row"><span class="res-tip-label">Recall</span><span class="res-tip-val">${(row.recall ?? 0).toFixed(3)}</span></div>`;
+      return (
+        '<div class="res-tip-title" style="color:' +
+        m.color +
+        '">' +
+        m.label +
+        "</div>" +
+        (subtitle
+          ? '<div style="color:#86868b;font-size:11px;margin-bottom:5px">' +
+            subtitle +
+            "</div>"
+          : "") +
+        '<div class="res-tip-row"><span class="res-tip-label">ROC-AUC</span><span class="res-tip-val">' +
+        (row.mean_roc_auc ?? row.roc_auc ?? 0).toFixed(3) +
+        "</span></div>" +
+        '<div class="res-tip-row"><span class="res-tip-label">PR-AUC</span><span class="res-tip-val">' +
+        (row.mean_pr_auc ?? row.pr_auc ?? 0).toFixed(3) +
+        "</span></div>" +
+        '<div class="res-tip-row"><span class="res-tip-label">F1</span><span class="res-tip-val">' +
+        (row.f1 ?? 0).toFixed(3) +
+        "</span></div>" +
+        '<div class="res-tip-row"><span class="res-tip-label">Precision</span><span class="res-tip-val">' +
+        (row.precision ?? 0).toFixed(3) +
+        "</span></div>" +
+        '<div class="res-tip-row"><span class="res-tip-label">Recall</span><span class="res-tip-val">' +
+        (row.recall ?? 0).toFixed(3) +
+        "</span></div>"
+      );
     }
 
     // HOVER STATE
     let hovered = null;
     function applyHover() {
-      d3.selectAll(".res-bar-rect").classed(
-        "res-dimmed",
-        (d) => hovered && d.model !== hovered,
-      );
-      d3.selectAll(".res-radar-poly").classed(
-        "res-dimmed",
-        (d) => hovered && d.key !== hovered,
-      );
-      d3.selectAll(".res-hm-cell").classed(
-        "res-dimmed",
-        (d) => hovered && d.model !== hovered,
-      );
-      d3.selectAll(".res-hm-val").classed(
-        "res-dimmed",
-        (d) => hovered && d.model !== hovered,
-      );
-      document.querySelectorAll(".res-legend-item").forEach((el) => {
+      d3.selectAll(".res-bar-rect").classed("res-dimmed", function (d) {
+        return hovered && d.model !== hovered;
+      });
+      d3.selectAll(".res-radar-poly").classed("res-dimmed", function (d) {
+        return hovered && d.key !== hovered;
+      });
+      d3.selectAll(".res-hm-cell").classed("res-dimmed", function (d) {
+        return hovered && d.model !== hovered;
+      });
+      d3.selectAll(".res-hm-val").classed("res-dimmed", function (d) {
+        return hovered && d.model !== hovered;
+      });
+      document.querySelectorAll(".res-legend-item").forEach(function (el) {
         el.classList.toggle("res-legend-active", el.dataset.key === hovered);
       });
     }
 
     // LEGEND
-    const legendEl = document.getElementById("res-legend");
-    MODELS.forEach((m) => {
-      const item = document.createElement("div");
+    var legendEl = document.getElementById("res-legend");
+    MODELS.forEach(function (m) {
+      var item = document.createElement("div");
       item.className = "res-legend-item";
       item.dataset.key = m.key;
       item.style.setProperty("--res-model-color", m.color);
-      item.innerHTML = `<span class="res-legend-dot" style="background:${m.color}"></span>${m.label}`;
-      item.addEventListener("mouseenter", () => {
+      item.innerHTML =
+        '<span class="res-legend-dot" style="background:' +
+        m.color +
+        '"></span>' +
+        m.label;
+      item.addEventListener("mouseenter", function () {
         hovered = m.key;
         applyHover();
       });
-      item.addEventListener("mouseleave", () => {
+      item.addEventListener("mouseleave", function () {
         hovered = null;
         applyHover();
       });
@@ -210,434 +224,503 @@
     // ════════════════════════════════
     // PLOT 1 — BAR CHART
     // ════════════════════════════════
-    const METRICS = [
+    var METRICS = [
       { key: "mean_roc_auc", label: "ROC-AUC", domain: [0.83, 0.935] },
       { key: "f1", label: "F1", domain: [0, 0.58] },
       { key: "precision", label: "Precision", domain: [0, 0.86] },
       { key: "recall", label: "Recall", domain: [0, 0.6] },
     ];
-    let activeMetric = METRICS[0];
+    var activeMetric = METRICS[0];
 
-    const toggleRow = document.getElementById("metric-toggles");
-    METRICS.forEach((m) => {
-      const btn = document.createElement("button");
+    var toggleRow = document.getElementById("metric-toggles");
+    METRICS.forEach(function (m) {
+      var btn = document.createElement("button");
       btn.className =
         "res-toggle-btn" + (m === activeMetric ? " res-toggle-active" : "");
       btn.textContent = m.label;
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", function () {
         activeMetric = m;
-        document
-          .querySelectorAll(".res-toggle-btn")
-          .forEach((b) => b.classList.remove("res-toggle-active"));
+        document.querySelectorAll(".res-toggle-btn").forEach(function (b) {
+          b.classList.remove("res-toggle-active");
+        });
         btn.classList.add("res-toggle-active");
-        updateBars();
+        drawBar();
       });
       toggleRow.appendChild(btn);
     });
 
-    const bM = { top: 12, right: 16, bottom: 60, left: 52 };
-    const bW = 580,
-      bH = 240;
-    const bSvg = d3
-      .select("#res-bar-chart")
-      .attr(
-        "viewBox",
-        `0 0 ${bW + bM.left + bM.right} ${bH + bM.top + bM.bottom}`,
-      )
-      .attr("width", "100%");
-    const bG = bSvg
-      .append("g")
-      .attr("transform", `translate(${bM.left},${bM.top})`);
-    const bX = d3.scaleBand().domain(MODEL_KEYS).range([0, bW]).padding(0.3);
-    const bY = d3.scaleLinear().range([bH, 0]);
-    const bXA = bG
-      .append("g")
-      .attr("class", "axis")
-      .attr("transform", `translate(0,${bH})`);
-    const bYA = bG.append("g").attr("class", "axis");
-    const bGr = bG.append("g");
+    var barSvgEl = document.getElementById("res-bar-chart");
 
-    function updateBars() {
-      bY.domain(activeMetric.domain).nice();
-      bGr.selectAll("line").remove();
-      bY.ticks(4).forEach((t) =>
-        bGr
-          .append("line")
+    function drawBar() {
+      var container = barSvgEl.parentElement;
+      var totalW = container.clientWidth || 400;
+      var isMobile = totalW < 480;
+      var bM = {
+        top: 12,
+        right: 12,
+        bottom: isMobile ? 36 : 56,
+        left: isMobile ? 36 : 48,
+      };
+      var bW = totalW - bM.left - bM.right;
+      var bH = isMobile ? 170 : 240;
+
+      barSvgEl.innerHTML = "";
+      var bSvg = d3
+        .select(barSvgEl)
+        .attr("viewBox", "0 0 " + totalW + " " + (bH + bM.top + bM.bottom))
+        .attr("width", "100%");
+
+      var bG = bSvg
+        .append("g")
+        .attr("transform", "translate(" + bM.left + "," + bM.top + ")");
+      var bX = d3.scaleBand().domain(MODEL_KEYS).range([0, bW]).padding(0.3);
+      var bY = d3
+        .scaleLinear()
+        .domain(activeMetric.domain)
+        .nice()
+        .range([bH, 0]);
+
+      bY.ticks(4).forEach(function (t) {
+        bG.append("line")
           .attr("x1", 0)
           .attr("x2", bW)
           .attr("y1", bY(t))
           .attr("y2", bY(t))
           .attr("stroke", "#e5e5ea")
-          .attr("stroke-width", 0.5),
-      );
-      bXA
+          .attr("stroke-width", 0.5);
+      });
+
+      bG.append("g")
+        .attr("class", "axis")
+        .attr("transform", "translate(0," + bH + ")")
         .call(
           d3
             .axisBottom(bX)
-            .tickFormat((k) => modelOf(k)?.short ?? k)
+            .tickFormat(function (k) {
+              return modelOf(k) ? modelOf(k).short : k;
+            })
             .tickSize(0),
         )
         .selectAll("text")
-        .attr("dy", "1.4em")
-        .style("font-size", "15px")
+        .attr("dy", "1.2em")
+        .style("font-size", isMobile ? "10px" : "13px")
         .style("font-family", "JetBrains Mono, monospace");
-      bYA
+
+      bG.append("g")
+        .attr("class", "axis")
         .call(d3.axisLeft(bY).ticks(4).tickFormat(d3.format(".2f")).tickSize(0))
         .selectAll("text")
-        .attr("dx", "-0.6em")
-        .style("font-size", "14px");
+        .attr("dx", "-0.4em")
+        .style("font-size", isMobile ? "10px" : "13px");
 
-      const groups = bG.selectAll(".res-bar-group").data(MODEL_KEYS);
-      const allG = groups
-        .enter()
-        .append("g")
-        .attr("class", "res-bar-group")
-        .merge(groups)
-        .attr("transform", (d) => `translate(${bX(d)},0)`);
+      MODEL_KEYS.forEach(function (mk) {
+        var row = overall.find(function (r) {
+          return r.model_type === mk;
+        });
+        if (!row) return;
+        var val = row[activeMetric.key];
+        var x = bX(mk),
+          w = bX.bandwidth();
+        var datum = { model: mk, val: val, row: row };
 
-      const bars = allG.selectAll(".res-bar-rect").data((d) => {
-        const row = overall.find((r) => r.model_type === d);
-        return row ? [{ model: d, val: row[activeMetric.key], row }] : [];
+        bG.append("rect")
+          .attr("class", "res-bar-rect")
+          .datum(datum)
+          .attr("x", x)
+          .attr("width", w)
+          .attr("y", bH)
+          .attr("height", 0)
+          .attr("rx", 3)
+          .attr("fill", colorOf(mk))
+          .on("mouseover", function (ev) {
+            hovered = mk;
+            applyHover();
+            showTip(makeTip(mk, row), ev);
+          })
+          .on("mousemove", moveTip)
+          .on("mouseout", function () {
+            hovered = null;
+            applyHover();
+            hideTip();
+          })
+          .transition()
+          .duration(420)
+          .ease(d3.easeCubicOut)
+          .attr("y", bY(val))
+          .attr("height", bH - bY(val));
+
+        if (!isMobile) {
+          bG.append("text")
+            .datum(datum)
+            .attr("class", "res-bar-label")
+            .attr("x", x + w / 2)
+            .attr("text-anchor", "middle")
+            .attr("font-size", "11px")
+            .attr("font-family", "JetBrains Mono, monospace")
+            .attr("fill", colorOf(mk))
+            .attr("pointer-events", "none")
+            .transition()
+            .duration(420)
+            .ease(d3.easeCubicOut)
+            .attr("y", bY(val) - 4)
+            .text(val.toFixed(3));
+        }
       });
 
-      bars
-        .enter()
-        .append("rect")
-        .attr("class", "res-bar-rect")
-        .attr("x", 0)
-        .attr("width", bX.bandwidth())
-        .attr("y", bH)
-        .attr("height", 0)
-        .attr("rx", 4)
-        .attr("fill", (d) => colorOf(d.model))
-        .merge(bars)
-        .on("mouseover", (ev, d) => {
-          hovered = d.model;
-          applyHover();
-          showTip(makeTip(d.model, d.row), ev);
-        })
-        .on("mousemove", moveTip)
-        .on("mouseout", () => {
-          hovered = null;
-          applyHover();
-          hideTip();
-        })
-        .transition()
-        .duration(420)
-        .ease(d3.easeCubicOut)
-        .attr("y", (d) => bY(d.val))
-        .attr("height", (d) => bH - bY(d.val));
-
-      // value labels on bars
-      const labels = allG.selectAll(".res-bar-label").data((d) => {
-        const row = overall.find((r) => r.model_type === d);
-        return row ? [{ model: d, val: row[activeMetric.key] }] : [];
-      });
-      labels
-        .enter()
-        .append("text")
-        .attr("class", "res-bar-label")
-        .attr("x", bX.bandwidth() / 2)
-        .attr("text-anchor", "middle")
-        .attr("font-size", "13px")
-        .attr("font-family", "JetBrains Mono, monospace")
-        .attr("fill", (d) => colorOf(d.model))
-        .merge(labels)
-        .transition()
-        .duration(420)
-        .ease(d3.easeCubicOut)
-        .attr("y", (d) => bY(d.val) - 5)
-        .text((d) => d.val.toFixed(3));
-
-      bars.exit().remove();
-      labels.exit().remove();
       applyHover();
     }
-    updateBars();
+
+    drawBar();
+    new ResizeObserver(function () {
+      drawBar();
+    }).observe(barSvgEl.parentElement);
 
     // ════════════════════════════════
     // PLOT 2 — RADAR
     // ════════════════════════════════
-    const RAXES = [
+    var RAXES = [
       { key: "mean_roc_auc", label: "ROC-AUC", min: 0.83, max: 0.935 },
       { key: "mean_pr_auc", label: "PR-AUC", min: 0.17, max: 0.28 },
       { key: "f1", label: "F1", min: 0.0, max: 0.56 },
       { key: "recall", label: "Recall", min: 0.0, max: 0.6 },
       { key: "precision", label: "Precision", min: 0.0, max: 0.86 },
     ];
-    const RN = RAXES.length,
-      rW = 440,
-      rH = 330,
-      rR = 110,
-      rcx = rW / 2,
-      rcy = rH / 2 + 6;
+    var RN = RAXES.length;
+    var radarSvgEl = document.getElementById("res-radar-chart");
 
-    const rSvg = d3
-      .select("#res-radar-chart")
-      .attr("viewBox", `0 0 ${rW} ${rH}`)
-      .attr("width", "100%");
-    const rG = rSvg.append("g");
+    function drawRadar() {
+      var container = radarSvgEl.parentElement;
+      var totalW = container.clientWidth || 360;
+      var isMobile = totalW < 380;
+      var rW = totalW;
+      var rH = isMobile ? totalW * 0.88 : totalW * 0.78;
+      var rR = Math.min(rW, rH) * (isMobile ? 0.28 : 0.32);
+      var rcx = rW / 2;
+      var rcy = rH / 2 + (isMobile ? 8 : 12);
+      var labelOffset = rR + (isMobile ? 22 : 30);
+      var fontSize = isMobile ? "11px" : "13px";
 
-    [0.25, 0.5, 0.75, 1].forEach((t) => {
-      const pts = RAXES.map((_, i) => {
-        const a = (i / RN) * 2 * Math.PI - Math.PI / 2;
-        return [rcx + rR * t * Math.cos(a), rcy + rR * t * Math.sin(a)];
-      });
-      rG.append("polygon")
-        .attr("points", pts.map((p) => p.join(",")).join(" "))
-        .attr("fill", "none")
-        .attr("stroke", "#e5e5ea")
-        .attr("stroke-width", 0.5);
-    });
+      radarSvgEl.innerHTML = "";
+      var rSvg = d3
+        .select(radarSvgEl)
+        .attr("viewBox", "0 0 " + rW + " " + rH)
+        .attr("width", "100%");
+      var rG = rSvg.append("g");
 
-    RAXES.forEach((ax, i) => {
-      const a = (i / RN) * 2 * Math.PI - Math.PI / 2;
-      rG.append("line")
-        .attr("x1", rcx)
-        .attr("y1", rcy)
-        .attr("x2", rcx + rR * Math.cos(a))
-        .attr("y2", rcy + rR * Math.sin(a))
-        .attr("stroke", "#e5e5ea")
-        .attr("stroke-width", 0.5);
-      rG.append("text")
-        .attr("x", rcx + (rR + 30) * Math.cos(a))
-        .attr("y", rcy + (rR + 30) * Math.sin(a))
-        .attr("text-anchor", "middle")
-        .attr("dominant-baseline", "middle")
-        .attr("fill", "#333")
-        .attr("font-size", "15px")
-        .attr("font-weight", "500")
-        .attr("font-family", "-apple-system,BlinkMacSystemFont,sans-serif")
-        .text(ax.label);
-    });
-
-    MODELS.forEach((m) => {
-      const row = overall.find((r) => r.model_type === m.key);
-      if (!row) return;
-      const pts = RAXES.map((ax, i) => {
-        const t = Math.max(
-          0,
-          Math.min(1, (row[ax.key] - ax.min) / (ax.max - ax.min)),
-        );
-        const a = (i / RN) * 2 * Math.PI - Math.PI / 2;
-        return [rcx + rR * t * Math.cos(a), rcy + rR * t * Math.sin(a)];
-      });
-      rG.append("polygon")
-        .datum({ key: m.key })
-        .attr("class", "res-radar-poly")
-        .attr("points", pts.map((p) => p.join(",")).join(" "))
-        .attr("fill", m.color)
-        .attr("fill-opacity", 0.1)
-        .attr("stroke", m.color)
-        .attr("stroke-width", 2)
-        .style("cursor", "pointer")
-        .on("mouseover", (ev) => {
-          hovered = m.key;
-          applyHover();
-          showTip(makeTip(m.key, row), ev);
-        })
-        .on("mousemove", moveTip)
-        .on("mouseout", () => {
-          hovered = null;
-          applyHover();
-          hideTip();
+      [0.25, 0.5, 0.75, 1].forEach(function (t) {
+        var pts = RAXES.map(function (_, i) {
+          var a = (i / RN) * 2 * Math.PI - Math.PI / 2;
+          return [rcx + rR * t * Math.cos(a), rcy + rR * t * Math.sin(a)];
         });
-    });
+        rG.append("polygon")
+          .attr(
+            "points",
+            pts
+              .map(function (p) {
+                return p.join(",");
+              })
+              .join(" "),
+          )
+          .attr("fill", "none")
+          .attr("stroke", "#e5e5ea")
+          .attr("stroke-width", 0.5);
+      });
+
+      RAXES.forEach(function (ax, i) {
+        var a = (i / RN) * 2 * Math.PI - Math.PI / 2;
+        rG.append("line")
+          .attr("x1", rcx)
+          .attr("y1", rcy)
+          .attr("x2", rcx + rR * Math.cos(a))
+          .attr("y2", rcy + rR * Math.sin(a))
+          .attr("stroke", "#e5e5ea")
+          .attr("stroke-width", 0.5);
+        rG.append("text")
+          .attr("x", rcx + labelOffset * Math.cos(a))
+          .attr("y", rcy + labelOffset * Math.sin(a))
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "middle")
+          .attr("fill", "#333")
+          .attr("font-size", fontSize)
+          .attr("font-weight", "500")
+          .attr("font-family", "-apple-system,BlinkMacSystemFont,sans-serif")
+          .text(ax.label);
+      });
+
+      MODELS.forEach(function (m) {
+        var row = overall.find(function (r) {
+          return r.model_type === m.key;
+        });
+        if (!row) return;
+        var pts = RAXES.map(function (ax, i) {
+          var t = Math.max(
+            0,
+            Math.min(1, (row[ax.key] - ax.min) / (ax.max - ax.min)),
+          );
+          var a = (i / RN) * 2 * Math.PI - Math.PI / 2;
+          return [rcx + rR * t * Math.cos(a), rcy + rR * t * Math.sin(a)];
+        });
+        rG.append("polygon")
+          .datum({ key: m.key })
+          .attr("class", "res-radar-poly")
+          .attr(
+            "points",
+            pts
+              .map(function (p) {
+                return p.join(",");
+              })
+              .join(" "),
+          )
+          .attr("fill", m.color)
+          .attr("fill-opacity", 0.1)
+          .attr("stroke", m.color)
+          .attr("stroke-width", 2)
+          .style("cursor", "pointer")
+          .on("mouseover", function (ev) {
+            hovered = m.key;
+            applyHover();
+            showTip(makeTip(m.key, row), ev);
+          })
+          .on("mousemove", moveTip)
+          .on("mouseout", function () {
+            hovered = null;
+            applyHover();
+            hideTip();
+          });
+      });
+
+      applyHover();
+    }
+
+    drawRadar();
+    new ResizeObserver(function () {
+      drawRadar();
+    }).observe(radarSvgEl.parentElement);
 
     // ════════════════════════════════
     // PLOT 3 — HEATMAP
     // ════════════════════════════════
-    // Larger cells so numbers are readable
-    const cellW = 54,
-      cellH = 38;
-    const hmM = { top: 24, right: 24, bottom: 120, left: 80 };
-    const hmW = TARGETS.length * cellW,
-      hmH = MODEL_KEYS.length * cellH;
+    var hmSvgEl = document.getElementById("res-heatmap");
 
-    const hmSvg = d3
-      .select("#res-heatmap")
-      .attr(
-        "viewBox",
-        `0 0 ${hmW + hmM.left + hmM.right} ${hmH + hmM.top + hmM.bottom}`,
-      )
-      .attr("width", Math.max(900, hmW + hmM.left + hmM.right))
-      .style("min-width", "900px");
+    function drawHeatmap() {
+      var container = hmSvgEl.closest(".res-heatmap-wrap");
+      var availW = container.clientWidth || 320;
+      var isMobile = availW < 500;
 
-    const hmG = hmSvg
-      .append("g")
-      .attr("transform", `translate(${hmM.left},${hmM.top})`);
+      var cellW = isMobile ? 36 : 54;
+      var cellH = isMobile ? 28 : 38;
+      var rowLabelW = isMobile ? 44 : 80;
+      var colLabelH = isMobile ? 76 : 106;
+      var hmM = { top: 20, right: 16, bottom: colLabelH + 24, left: rowLabelW };
+      var hmW = TARGETS.length * cellW;
+      var hmH = MODEL_KEYS.length * cellH;
+      var totalW = hmW + hmM.left + hmM.right;
+      var totalH = hmH + hmM.top + hmM.bottom;
 
-    // High-contrast diverging color: white at midpoint, blue at top
-    // Use a 3-stop scale: low=warm amber, mid=white, high=blue
-    const hmColor = d3
-      .scaleLinear()
-      .domain([0.74, 0.855, 0.96])
-      .range(["#fef3c7", "#ffffff", "#3b82f6"])
-      .clamp(true);
+      hmSvgEl.innerHTML = "";
+      d3.select(hmSvgEl)
+        .attr("viewBox", "0 0 " + totalW + " " + totalH)
+        .attr("width", totalW)
+        .attr("height", totalH)
+        .style("min-width", null)
+        .style("display", "block");
 
-    const cellData = [];
-    MODEL_KEYS.forEach((mk) =>
-      TARGETS.forEach((t) => {
-        const row = perTarget.find(
-          (r) => r.model_type === mk && r.target === t,
-        );
-        cellData.push({ model: mk, target: t, row: row || null });
-      }),
-    );
+      var hmG = d3
+        .select(hmSvgEl)
+        .append("g")
+        .attr("transform", "translate(" + hmM.left + "," + hmM.top + ")");
 
-    // cells
-    hmG
-      .selectAll(".res-hm-cell")
-      .data(cellData)
-      .enter()
-      .append("rect")
-      .attr("class", "res-hm-cell")
-      .attr("x", (d) => TARGETS.indexOf(d.target) * cellW + 1)
-      .attr("y", (d) => MODEL_KEYS.indexOf(d.model) * cellH + 1)
-      .attr("width", cellW - 2)
-      .attr("height", cellH - 2)
-      .attr("rx", 3)
-      .attr("fill", (d) => (d.row ? hmColor(d.row.roc_auc) : "#f5f5f7"))
-      .style("cursor", "pointer")
-      .on("mouseover", (ev, d) => {
-        if (!d.row) return;
-        hovered = d.model;
-        applyHover();
-        showTip(
-          makeTip(d.model, d.row, TARGET_LABELS[d.target] || d.target),
-          ev,
-        );
-      })
-      .on("mousemove", moveTip)
-      .on("mouseout", () => {
-        hovered = null;
-        applyHover();
-        hideTip();
-      })
-      .on("click", (_, d) => {
-        if (d.row) showDetailCell(d);
+      var hmColor = d3
+        .scaleLinear()
+        .domain([0.74, 0.855, 0.96])
+        .range(["#fef3c7", "#ffffff", "#3b82f6"])
+        .clamp(true);
+
+      var cellData = [];
+      MODEL_KEYS.forEach(function (mk) {
+        TARGETS.forEach(function (t) {
+          var row = perTarget.find(function (r) {
+            return r.model_type === mk && r.target === t;
+          });
+          cellData.push({ model: mk, target: t, row: row || null });
+        });
       });
 
-    // value text — dark text on light cells, white on dark cells
-    hmG
-      .selectAll(".res-hm-val")
-      .data(cellData)
-      .enter()
-      .append("text")
-      .attr("class", "res-hm-val")
-      .attr("x", (d) => TARGETS.indexOf(d.target) * cellW + cellW / 2)
-      .attr("y", (d) => MODEL_KEYS.indexOf(d.model) * cellH + cellH / 2 + 1)
-      .attr("text-anchor", "middle")
-      .attr("dominant-baseline", "middle")
-      .attr("font-size", "10px")
-      .attr("font-weight", "600")
-      .attr("font-family", "JetBrains Mono, monospace")
-      .attr("fill", (d) => {
-        if (!d.row) return "#aaa";
-        // dark text for light cells (mid range), white for deep blue cells
-        return d.row.roc_auc > 0.91 ? "#fff" : "#1d1d1f";
-      })
-      .attr("pointer-events", "none")
-      .text((d) => (d.row ? d.row.roc_auc.toFixed(2) : "—"));
-
-    // row labels (model short names)
-    MODEL_KEYS.forEach((mk, i) => {
-      const m = modelOf(mk);
       hmG
-        .append("text")
-        .attr("x", -8)
-        .attr("y", i * cellH + cellH / 2 + 1)
-        .attr("text-anchor", "end")
-        .attr("dominant-baseline", "middle")
-        .attr("font-size", "11px")
-        .attr("font-family", "JetBrains Mono, monospace")
-        .attr("font-weight", "500")
-        .attr("fill", m.color)
-        .style("cursor", "pointer")
-        .text(m.short)
-        .on("mouseover", () => {
-          hovered = mk;
-          applyHover();
+        .selectAll(".res-hm-cell")
+        .data(cellData)
+        .enter()
+        .append("rect")
+        .attr("class", "res-hm-cell")
+        .attr("x", function (d) {
+          return TARGETS.indexOf(d.target) * cellW + 1;
         })
-        .on("mouseout", () => {
+        .attr("y", function (d) {
+          return MODEL_KEYS.indexOf(d.model) * cellH + 1;
+        })
+        .attr("width", cellW - 2)
+        .attr("height", cellH - 2)
+        .attr("rx", 3)
+        .attr("fill", function (d) {
+          return d.row ? hmColor(d.row.roc_auc) : "#f5f5f7";
+        })
+        .style("cursor", "pointer")
+        .on("mouseover", function (ev, d) {
+          if (!d.row) return;
+          hovered = d.model;
+          applyHover();
+          showTip(
+            makeTip(d.model, d.row, TARGET_LABELS[d.target] || d.target),
+            ev,
+          );
+        })
+        .on("mousemove", moveTip)
+        .on("mouseout", function () {
           hovered = null;
           applyHover();
+          hideTip();
+        })
+        .on("click", function (_, d) {
+          if (d.row) showDetailCell(d);
         });
-    });
 
-    // column labels (diagnosis names) — angled
-    TARGETS.forEach((t, i) => {
-      hmG
-        .append("text")
+      if (!isMobile) {
+        hmG
+          .selectAll(".res-hm-val")
+          .data(cellData)
+          .enter()
+          .append("text")
+          .attr("class", "res-hm-val")
+          .attr("x", function (d) {
+            return TARGETS.indexOf(d.target) * cellW + cellW / 2;
+          })
+          .attr("y", function (d) {
+            return MODEL_KEYS.indexOf(d.model) * cellH + cellH / 2 + 1;
+          })
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "middle")
+          .attr("font-size", "10px")
+          .attr("font-weight", "600")
+          .attr("font-family", "JetBrains Mono, monospace")
+          .attr("fill", function (d) {
+            return !d.row ? "#aaa" : d.row.roc_auc > 0.91 ? "#fff" : "#1d1d1f";
+          })
+          .attr("pointer-events", "none")
+          .text(function (d) {
+            return d.row ? d.row.roc_auc.toFixed(2) : "\u2014";
+          });
+      }
+
+      MODEL_KEYS.forEach(function (mk, i) {
+        var m = modelOf(mk);
+        hmG
+          .append("text")
+          .attr("x", -6)
+          .attr("y", i * cellH + cellH / 2 + 1)
+          .attr("text-anchor", "end")
+          .attr("dominant-baseline", "middle")
+          .attr("font-size", isMobile ? "9px" : "11px")
+          .attr("font-family", "JetBrains Mono, monospace")
+          .attr("font-weight", "500")
+          .attr("fill", m.color)
+          .style("cursor", "pointer")
+          .text(m.short)
+          .on("mouseover", function () {
+            hovered = mk;
+            applyHover();
+          })
+          .on("mouseout", function () {
+            hovered = null;
+            applyHover();
+          });
+      });
+
+      var colFontSize = isMobile ? "9px" : "11px";
+      var colAngle = isMobile ? 50 : 40;
+      TARGETS.forEach(function (t, i) {
+        hmG
+          .append("text")
+          .attr(
+            "transform",
+            "translate(" +
+              (i * cellW + cellW / 2) +
+              "," +
+              (hmH + 8) +
+              ") rotate(" +
+              colAngle +
+              ")",
+          )
+          .attr("text-anchor", "start")
+          .attr("font-size", colFontSize)
+          .attr("font-family", "-apple-system,sans-serif")
+          .attr("fill", "#444")
+          .style("cursor", "pointer")
+          .text(TARGET_LABELS[t] || t)
+          .on("click", function () {
+            showDetailColumn(t);
+          });
+      });
+
+      var defs = d3.select(hmSvgEl).append("defs");
+      var gid = "hmGradRes4";
+      var lg = defs.append("linearGradient").attr("id", gid);
+      lg.append("stop").attr("offset", "0%").attr("stop-color", "#fef3c7");
+      lg.append("stop").attr("offset", "50%").attr("stop-color", "#ffffff");
+      lg.append("stop").attr("offset", "100%").attr("stop-color", "#3b82f6");
+
+      var lgG = d3
+        .select(hmSvgEl)
+        .append("g")
         .attr(
           "transform",
-          `translate(${i * cellW + cellW / 2},${hmH + 10}) rotate(40)`,
-        )
-        .attr("text-anchor", "start")
-        .attr("font-size", "11px")
+          "translate(" + hmM.left + "," + (hmM.top + hmH + colLabelH + 4) + ")",
+        );
+      lgG
+        .append("rect")
+        .attr("width", 120)
+        .attr("height", 7)
+        .attr("rx", 4)
+        .attr("fill", "url(#" + gid + ")")
+        .attr("stroke", "#e5e5ea")
+        .attr("stroke-width", 0.5);
+      [
+        ["0", "0.74"],
+        ["60", "0.855"],
+        ["120", "0.96 \u2192"],
+      ].forEach(function (pair) {
+        lgG
+          .append("text")
+          .attr("x", +pair[0])
+          .attr("y", -5)
+          .attr(
+            "text-anchor",
+            +pair[0] === 120 ? "end" : +pair[0] === 60 ? "middle" : "start",
+          )
+          .attr("font-size", "9px")
+          .attr("font-family", "JetBrains Mono,monospace")
+          .attr("fill", "#86868b")
+          .text(pair[1]);
+      });
+      lgG
+        .append("text")
+        .attr("x", 0)
+        .attr("y", 18)
+        .attr("font-size", "9px")
         .attr("font-family", "-apple-system,sans-serif")
-        .attr("fill", "#444")
-        .style("cursor", "pointer")
-        .text(TARGET_LABELS[t] || t)
-        .on("click", () => showDetailColumn(t));
-    });
+        .attr("fill", "#86868b")
+        .text("ROC-AUC");
 
-    // colour scale legend bar
-    const defs = hmSvg.append("defs");
-    const gid = "hmGradRes4";
-    const lg = defs.append("linearGradient").attr("id", gid);
-    lg.append("stop").attr("offset", "0%").attr("stop-color", "#fef3c7");
-    lg.append("stop").attr("offset", "50%").attr("stop-color", "#ffffff");
-    lg.append("stop").attr("offset", "100%").attr("stop-color", "#3b82f6");
-    const lgG = hmSvg
-      .append("g")
-      .attr("transform", `translate(${hmM.left},${hmM.top + hmH + 96})`);
-    lgG
-      .append("rect")
-      .attr("width", 130)
-      .attr("height", 8)
-      .attr("rx", 4)
-      .attr("fill", `url(#${gid})`)
-      .attr("stroke", "#e5e5ea")
-      .attr("stroke-width", 0.5);
-    lgG
-      .append("text")
-      .attr("x", 0)
-      .attr("y", -6)
-      .attr("font-size", "10px")
-      .attr("font-family", "JetBrains Mono,monospace")
-      .attr("fill", "#86868b")
-      .text("0.74");
-    lgG
-      .append("text")
-      .attr("x", 65)
-      .attr("y", -6)
-      .attr("text-anchor", "middle")
-      .attr("font-size", "10px")
-      .attr("font-family", "JetBrains Mono,monospace")
-      .attr("fill", "#86868b")
-      .text("0.855");
-    lgG
-      .append("text")
-      .attr("x", 130)
-      .attr("y", -6)
-      .attr("text-anchor", "end")
-      .attr("font-size", "10px")
-      .attr("font-family", "JetBrains Mono,monospace")
-      .attr("fill", "#86868b")
-      .text("0.96 →");
-    lgG
-      .append("text")
-      .attr("x", 0)
-      .attr("y", 20)
-      .attr("font-size", "10px")
-      .attr("font-family", "-apple-system,sans-serif")
-      .attr("fill", "#86868b")
-      .text("ROC-AUC");
+      applyHover();
+    }
+
+    drawHeatmap();
+    new ResizeObserver(function () {
+      drawHeatmap();
+    }).observe(hmSvgEl.closest(".res-heatmap-wrap"));
 
     // ── DETAIL PANEL ────────────────────────────────
-    const detailEl = document.getElementById("res-detail");
-    const DBARS = [
+    var detailEl = document.getElementById("res-detail");
+    var DBARS = [
       { key: "roc_auc", label: "ROC-AUC", color: "#4f8ef7", max: 1 },
       { key: "pr_auc", label: "PR-AUC", color: "#a78bfa", max: 0.85 },
       { key: "f1", label: "F1", color: "#34d399", max: 1 },
@@ -646,54 +729,92 @@
     ];
 
     function showDetailCell(d) {
-      const r = d.row,
+      var r = d.row,
         m = modelOf(d.model);
-      detailEl.innerHTML = `
-        <div class="res-detail-title">
-          <span style="color:${m.color}">${m.label}</span>
-          <span style="color:#86868b;font-weight:400"> · ${TARGET_LABELS[d.target] || d.target}</span>
-        </div>
-        <div class="res-detail-bars">
-          ${DBARS.map((db) => {
-            const val = r[db.key] ?? 0,
-              pct = Math.min(100, (val / db.max) * 100);
-            return `<div class="res-dbar-row">
-              <div class="res-dbar-label">${db.label}</div>
-              <div class="res-dbar-track"><div class="res-dbar-fill" style="width:${pct}%;background:${db.color}"></div></div>
-              <div class="res-dbar-val">${val.toFixed(3)}</div>
-            </div>`;
-          }).join("")}
-        </div>`;
+      detailEl.innerHTML =
+        '<div class="res-detail-title">' +
+        '<span style="color:' +
+        m.color +
+        '">' +
+        m.label +
+        "</span>" +
+        '<span style="color:#86868b;font-weight:400"> \u00b7 ' +
+        (TARGET_LABELS[d.target] || d.target) +
+        "</span>" +
+        '</div><div class="res-detail-bars">' +
+        DBARS.map(function (db) {
+          var val = r[db.key] || 0,
+            pct = Math.min(100, (val / db.max) * 100);
+          return (
+            '<div class="res-dbar-row">' +
+            '<div class="res-dbar-label">' +
+            db.label +
+            "</div>" +
+            '<div class="res-dbar-track"><div class="res-dbar-fill" style="width:' +
+            pct +
+            "%;background:" +
+            db.color +
+            '"></div></div>' +
+            '<div class="res-dbar-val">' +
+            val.toFixed(3) +
+            "</div>" +
+            "</div>"
+          );
+        }).join("") +
+        "</div>";
     }
 
     function showDetailColumn(target) {
-      const label = TARGET_LABELS[target] || target;
-      const rows = MODEL_KEYS.map((mk) => ({
-        model: mk,
-        r: perTarget.find((x) => x.model_type === mk && x.target === target),
-      }))
-        .filter((x) => x.r)
-        .sort((a, b) => b.r.roc_auc - a.r.roc_auc);
-      detailEl.innerHTML = `
-        <div class="res-detail-title">
-          ${label}<span style="color:#86868b;font-weight:400"> · ROC-AUC ranking</span>
-        </div>
-        <div class="res-detail-bars">
-          ${rows
-            .map((x, i) => {
-              const m = modelOf(x.model);
-              const pct = Math.min(
-                100,
-                ((x.r.roc_auc - 0.74) / (0.96 - 0.74)) * 100,
-              );
-              return `<div class="res-dbar-row">
-              <div class="res-dbar-label" style="color:${m.color}">#${i + 1} ${m.short}</div>
-              <div class="res-dbar-track"><div class="res-dbar-fill" style="width:${pct}%;background:${m.color}"></div></div>
-              <div class="res-dbar-val">${x.r.roc_auc.toFixed(3)}</div>
-            </div>`;
-            })
-            .join("")}
-        </div>`;
+      var label = TARGET_LABELS[target] || target;
+      var rows = MODEL_KEYS.map(function (mk) {
+        return {
+          model: mk,
+          r: perTarget.find(function (x) {
+            return x.model_type === mk && x.target === target;
+          }),
+        };
+      })
+        .filter(function (x) {
+          return x.r;
+        })
+        .sort(function (a, b) {
+          return b.r.roc_auc - a.r.roc_auc;
+        });
+
+      detailEl.innerHTML =
+        '<div class="res-detail-title">' +
+        label +
+        '<span style="color:#86868b;font-weight:400"> \u00b7 ROC-AUC ranking</span>' +
+        '</div><div class="res-detail-bars">' +
+        rows
+          .map(function (x, i) {
+            var m = modelOf(x.model);
+            var pct = Math.min(
+              100,
+              ((x.r.roc_auc - 0.74) / (0.96 - 0.74)) * 100,
+            );
+            return (
+              '<div class="res-dbar-row">' +
+              '<div class="res-dbar-label" style="color:' +
+              m.color +
+              '">#' +
+              (i + 1) +
+              " " +
+              m.short +
+              "</div>" +
+              '<div class="res-dbar-track"><div class="res-dbar-fill" style="width:' +
+              pct +
+              "%;background:" +
+              m.color +
+              '"></div></div>' +
+              '<div class="res-dbar-val">' +
+              x.r.roc_auc.toFixed(3) +
+              "</div>" +
+              "</div>"
+            );
+          })
+          .join("") +
+        "</div>";
     }
   } // end init()
 })();
