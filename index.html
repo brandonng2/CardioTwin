@@ -25,14 +25,13 @@
         <a href="#methodology">Methodology</a>
         <a href="#results">Results</a>
         <a href="#about">About</a>
-        <a href="https://github.com/brandonng2/ClinicalDigitalTwin/tree/main" target="_blank" class="nav-icon-link"
-          title="View on GitHub">
+        <a href="https://github.com/brandonng2/ClinicalDigitalTwin/tree/main" target="_blank" class="nav-icon-link"title="View on GitHub">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
             <path
               d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z" />
           </svg>
         </a>
-        <a href="#references" class="nav-icon-link" title="Research Paper">
+        <a href="https://drive.google.com/file/d/1jadO9YqNcrD0TnXou07PLXEtcshjGDDR/view?usp=sharing" target="_blank" class="nav-icon-link" title="Research Paper">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
             stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -100,17 +99,33 @@
     <section id="solution" class="section animate-on-scroll">
       <div class="card card-reveal">
         <h2>Our Solution</h2>
-        <p>
-          <strong>Clinical Digital Twin</strong> is an end-to-end pipeline that unifies MIMIC-IV hospital data,
-          emergency department records, and ECG measurements into a single representation for cardiovascular patients.
-          We train baseline models that predict diagnoses and ECG findings—establishing benchmarks for deeper AI that
-          could one day support clinicians at the point of care.
-        </p>
-        <div class="feature-pills">
-          <span class="pill">EHR + Vitals + ECG</span>
-          <span class="pill">Modular pipeline</span>
-          <span class="pill">XGBoost baselines</span>
-          <span class="pill">PhysioNet / MIMIC-IV</span>
+        <div class="solution-layout">
+          <div class="solution-text">
+            <p>
+              <strong>CardioTwin</strong> is a multimodal deep learning framework that unifies 12-lead ECG waveforms,
+              longitudinal vital sign trajectories, and structured EHR features into a single patient representation.
+              Rather than analyzing clinical signals in isolation, CardioTwin fuses all three modalities through a
+              learned gating mechanism—producing a continuously evolving digital twin of each patient's cardiovascular
+              state during their emergency department encounter.
+            </p>
+            <p>
+              The system predicts 17 cardiovascular ICD-10 diagnosis categories and is designed to support proactive
+              risk stratification at triage, before definitive diagnoses are available. By modeling the patient as a
+              unified, evolving entity rather than a series of disconnected data points, CardioTwin moves cardiac care
+              toward a continuous, personalized paradigm.
+            </p>
+            <div class="feature-pills">
+              <span class="pill">ECG-FM Waveform Embeddings</span>
+              <span class="pill">LSTM Vital Sign Encoder</span>
+              <span class="pill">Gated Multimodal Fusion</span>
+              <span class="pill">17 ICD-10 Categories</span>
+              <span class="pill">75,538 ED Encounters</span>
+            </div>
+          </div>
+          <div class="solution-image">
+            <img src="misc/digitaltwin.jpg" alt="Cardiovascular Digital Twin concept: ECG data and EHR metadata feed into a unified patient representation enabling early risk stratification and multi-label cardiovascular prediction" class="solution-img" />
+            <p class="solution-img-caption">ECG signals and EHR metadata are fused into a unified patient representation, enabling early risk stratification and multi-label cardiovascular prediction.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -204,28 +219,63 @@
     <section id="methodology" class="section animate-on-scroll">
       <div class="card card-reveal">
         <h2>Model Architecture</h2>
-        <p>XGBoost multi-label classifiers for two prediction tasks:</p>
+        <p>
+          CardioTwin integrates three dedicated encoders that each project into a shared 128-dimensional latent space,
+          then combines them through an adaptive gated fusion mechanism to produce a patient-specific cardiovascular representation.
+        </p>
+
+        <div class="arch-image-wrap">
+          <img src="misc/dt_arch.png" alt="CardioTwin architecture: ECG Recordings, Vital Signs, and EHR Features each pass through dedicated encoders into a Gated Multimodal Fusion layer, producing a Digital Twin patient state representation that drives 17 cardiovascular condition probabilities" class="arch-img" />
+          <p class="arch-img-caption">CardioTwin architecture. Three modality encoders project into a shared 128-dim space. A learned gate dynamically weights each modality per patient before a fusion MLP produces the final patient state representation.</p>
+        </div>
+
         <div class="model-cards">
           <div class="model-card animate-on-scroll">
             <div class="model-card-header">
-              <span class="model-badge">Task 1</span>
-              <h3>Diagnosis Prediction</h3>
+              <span class="model-badge">Encoder 1</span>
+              <h3>ECG Encoder</h3>
             </div>
-            <p><strong>Input:</strong> ECG measurements, vitals stats, demographics</p>
-            <p><strong>Output:</strong> Cardiovascular ICD-10 labels (AFib, HF, MI, etc.)</p>
+            <p><strong>Input:</strong> Up to two ECG-FM embeddings (1,536-dim each) extracted from 12-lead waveforms via a transformer foundation model pretrained on millions of ECGs.</p>
+            <p><strong>Architecture:</strong> Attention-pooled across ECGs → MLP (1536→256→128)</p>
+            <p><strong>Output:</strong> 128-dim ECG representation</p>
           </div>
           <div class="model-card animate-on-scroll">
             <div class="model-card-header">
-              <span class="model-badge">Task 2</span>
-              <h3>ECG Finding Prediction</h3>
+              <span class="model-badge">Encoder 2</span>
+              <h3>Vital Sign Encoder</h3>
             </div>
-            <p><strong>Input:</strong> Vitals stats, diagnosis labels, demographics</p>
-            <p><strong>Output:</strong> ECG findings (sinus rhythm, prolonged QT, etc.)</p>
+            <p><strong>Input:</strong> Summary statistics (30 features: mean/std/min/max × 6 vitals + 7 nearest-to-ECG) and raw time series (up to 12 timesteps × 6 channels).</p>
+            <p><strong>Architecture:</strong> Parallel MLP + single-layer LSTM (64 hidden units) → concatenated → Linear→128</p>
+            <p><strong>Output:</strong> 128-dim vital representation</p>
+          </div>
+          <div class="model-card animate-on-scroll">
+            <div class="model-card-header">
+              <span class="model-badge">Encoder 3</span>
+              <h3>EHR Encoder</h3>
+            </div>
+            <p><strong>Input:</strong> Structured EHR features including demographics, ECG interval measurements (PR, QRS, QT), and encounter metadata (~47 features).</p>
+            <p><strong>Architecture:</strong> MLP (dehr→64→128) with BatchNorm, GELU, Dropout</p>
+            <p><strong>Output:</strong> 128-dim EHR representation</p>
           </div>
         </div>
+
+        <div class="fusion-block animate-on-scroll">
+          <h3>Gated Multimodal Fusion</h3>
+          <p>
+            The three 128-dim modality encodings are concatenated into a 384-dim vector and passed through a two-layer gate network that produces three softmax-normalized weights—one per modality. The fused state is the weighted sum of encodings, then projected through a fusion MLP to a 64-dim patient representation. A linear head produces 17 sigmoid-activated output logits for multi-label diagnosis prediction.
+          </p>
+          <p>
+            This adaptive gating allows the model to dynamically rely on the most informative modality per patient. For example, ECG embeddings dominate for arrhythmia detection (e.g., atrial fibrillation), while vital signs drive predictions for hemodynamic conditions like hypertensive crisis.
+          </p>
+        </div>
+
         <div class="config-grid">
-          <div class="config-item"><span class="config-label">Algorithm</span>XGBoost + MultiOutputClassifier</div>
-          <div class="config-item"><span class="config-label">Train/Test</span>80/20 by patient</div>
+          <div class="config-item"><span class="config-label">Trainable Params</span>629,525</div>
+          <div class="config-item"><span class="config-label">Output Labels</span>17 ICD-10 categories</div>
+          <div class="config-item"><span class="config-label">Optimizer</span>AdamW + cosine LR</div>
+          <div class="config-item"><span class="config-label">Train / Val / Test</span>70% / 10% / 20%</div>
+          <div class="config-item"><span class="config-label">Loss</span>BCEWithLogitsLoss (class-weighted)</div>
+          <div class="config-item"><span class="config-label">Early Stop Metric</span>Macro-AUC (val set)</div>
         </div>
       </div>
     </section>

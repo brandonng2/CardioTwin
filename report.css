@@ -1119,3 +1119,75 @@ tbody tr:hover {
     padding: 32px 24px;
   }
 }
+
+/* Solution section layout */
+.solution-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  align-items: start;
+  margin-top: 20px;
+}
+
+.solution-image {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.solution-img {
+  width: 100%;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+}
+
+.solution-img-caption,
+.arch-img-caption {
+  font-size: 13px;
+  color: var(--text-muted, #888);
+  text-align: center;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* Architecture diagram */
+.arch-image-wrap {
+  margin: 28px 0 36px;
+  text-align: center;
+}
+
+.arch-img {
+  max-width: 100%;
+  width: 680px;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+}
+
+/* Fusion block */
+.fusion-block {
+  background: var(--surface-2, #f7f8fa);
+  border-left: 3px solid var(--accent, #6366f1);
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin: 28px 0 20px;
+}
+
+.fusion-block h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.fusion-block p {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-secondary, #555);
+}
+
+.fusion-block p:last-child { margin-bottom: 0; }
+
+@media (max-width: 900px) {
+  .solution-layout {
+    grid-template-columns: 1fr;
+  }
+}
