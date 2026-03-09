@@ -1,2 +1,2 @@
-mean_roc_auc,mean_pr_auc,accuracy,precision,recall,f1
-0.920,0.264,0.974,0.731,0.406,0.522
+model_type,mean_roc_auc,mean_pr_auc,accuracy,precision,recall,f1
+xgboost_embedding,0.9209508565485051,0.2642817510532578,0.9745480665076113,0.7319426021946219,0.4082868097127867,0.5241796200345423
