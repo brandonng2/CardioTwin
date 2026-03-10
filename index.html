@@ -29,6 +29,7 @@
         <a href="#how-it-works">How It Works</a>
         <a href="#methodology">Methodology</a>
         <a href="#results">Results</a>
+        <a href="#limitations">Limitations</a>
         <a href="#about">About</a>
         <a href="https://github.com/brandonng2/ClinicalDigitalTwin/tree/main" target="_blank" class="nav-icon-link"title="View on GitHub">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -108,19 +109,58 @@
           <div class="solution-text">
             <p>
               <strong>Clinical Digital Twin</strong> is an end-to-end pipeline that unifies MIMIC-IV hospital data,
-              emergency department records, and ECG measurements into a single representation for cardiovascular patients.
-              We train baseline models that predict diagnoses and ECG findings—establishing benchmarks for deeper AI that
-              could one day support clinicians at the point of care.
+              emergency department records, and ECG measurements into a single patient representation for cardiovascular risk prediction.
+              By fusing ECG waveforms, vital signs, and structured clinical features, we enable multi-label diagnosis prediction
+              across 17 cardiovascular ICD-10 categories — establishing a foundation for AI that can support earlier detection and personalized care.
             </p>
             <div class="feature-pills">
               <span class="pill">EHR + Vitals + ECG</span>
               <span class="pill">Modular pipeline</span>
-              <span class="pill">XGBoost baselines</span>
+              <span class="pill">Gated Multimodal Fusion</span>
               <span class="pill">PhysioNet / MIMIC-IV</span>
             </div>
           </div>
           <div class="solution-image">
             <img src="misc/digitaltwin.jpg" alt="Digital Twin concept: ECG data and EHR metadata feed into a unified patient representation for cardiovascular health prediction" class="solution-img" />
+          </div>
+        </div>
+
+        <div class="stakeholder-grid">
+          <div class="stakeholder-card">
+            <div class="stakeholder-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+            </div>
+            <div class="stakeholder-title">Patients</div>
+            <p class="stakeholder-desc">Earlier risk detection before symptoms appear, enabling personalized monitoring and preventative care over emergency intervention.</p>
+          </div>
+          <div class="stakeholder-card">
+            <div class="stakeholder-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+              </svg>
+            </div>
+            <div class="stakeholder-title">Clinicians</div>
+            <p class="stakeholder-desc">Decision support that surfaces high-risk patients, tracks health trends longitudinally, and enables earlier targeted interventions.</p>
+          </div>
+          <div class="stakeholder-card">
+            <div class="stakeholder-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+              </svg>
+            </div>
+            <div class="stakeholder-title">Hospitals &amp; Health Systems</div>
+            <p class="stakeholder-desc">Fewer emergency visits, more efficient resource allocation, and lower costs through a shift toward preventative cardiovascular care.</p>
+          </div>
+          <div class="stakeholder-card">
+            <div class="stakeholder-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+              </svg>
+            </div>
+            <div class="stakeholder-title">Researchers</div>
+            <p class="stakeholder-desc">Rich multimodal patient representations for studying disease progression and an open benchmark for comparing clinical fusion strategies.</p>
           </div>
         </div>
       </div>
@@ -174,6 +214,37 @@
         physiological trends. The result is a multimodal patient-level representation that reflects both baseline risk
         and real-time cardiac state, enabling robust cardiovascular risk modeling and improved predictive performance.
       </p>
+
+      <div class="groupsplit-callout animate-on-scroll">
+        <div class="groupsplit-header">
+          <span class="groupsplit-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </span>
+          <span class="groupsplit-title">GroupSplit: Preventing Data Leakage</span>
+        </div>
+        <p>
+          MIMIC-IV patients often have multiple ED encounters. A naive random split lets the same patient appear in both training and test sets, inflating performance by leaking patient-specific patterns.
+        </p>
+        <p>
+          <strong>GroupSplit</strong> solves this by splitting at the <code>subject_id</code> level — all encounters from one patient stay in the same partition. The 70/10/20 split is stratified on the most common diagnosis label to preserve class balance, ensuring evaluation reflects generalization to entirely unseen patients.
+        </p>
+        <div class="groupsplit-flow">
+          <span class="gs-step">75,538 ED encounters</span>
+          <span class="gs-arrow">→</span>
+          <span class="gs-step">Group by <code>subject_id</code></span>
+          <span class="gs-arrow">→</span>
+          <span class="gs-step">Stratified patient-level split</span>
+          <span class="gs-arrow">→</span>
+          <span class="gs-step gs-train">70% Train</span>
+          <span class="gs-sep">/</span>
+          <span class="gs-step gs-val">10% Val</span>
+          <span class="gs-sep">/</span>
+          <span class="gs-step gs-test">20% Test</span>
+        </div>
+      </div>
     </section>
 
     <section id="data" class="section animate-on-scroll">
@@ -322,6 +393,68 @@
           CardioTwin (gated BCE) achieves a macro ROC-AUC of <strong>0.907</strong> with the best precision–recall balance across 17 cardiovascular ICD-10 categories. The charts below compare seven models spanning tabular baselines, ECG-FM embedding augmentation, architecture ablations, and embedding size scaling.
         </p>
 
+        <div class="key-results-grid">
+          <div class="key-result-item">
+            <div class="kr-label">Top model macro ROC-AUC</div>
+            <div class="kr-value">0.907</div>
+            <div class="kr-note">CardioTwin (gated BCE) — best overall</div>
+          </div>
+          <div class="key-result-item">
+            <div class="kr-label">Macro F1 Score</div>
+            <div class="kr-value">0.497</div>
+            <div class="kr-note">Reflects class imbalance challenge</div>
+          </div>
+          <div class="key-result-item">
+            <div class="kr-label">Strongest per-label AUC</div>
+            <div class="kr-value">&gt;0.95</div>
+            <div class="kr-note">Hypertension, Heart Failure, AMI</div>
+          </div>
+          <div class="key-result-item">
+            <div class="kr-label">Gating vs. no-gate baseline</div>
+            <div class="kr-value">+0.011 AUC</div>
+            <div class="kr-note">Learned gating outperforms mean pooling</div>
+          </div>
+          <div class="key-result-item">
+            <div class="kr-label">ECG-FM vs. EHR-only</div>
+            <div class="kr-value">+0.023 AUC</div>
+            <div class="kr-note">ECG waveform embeddings add meaningful signal</div>
+          </div>
+          <div class="key-result-item">
+            <div class="kr-label">Test set size</div>
+            <div class="kr-value">24,782</div>
+            <div class="kr-note">Entirely unseen patients (GroupSplit)</div>
+          </div>
+        </div>
+
+        <div class="interpretation-callout animate-on-scroll">
+          <div class="interp-header">
+            <span class="interp-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            </span>
+            <span class="interp-title">How to Interpret These Results</span>
+          </div>
+          <div class="interp-grid">
+            <div class="interp-item">
+              <div class="interp-item-title">What ROC-AUC means here</div>
+              <p>A macro ROC-AUC of 0.907 means the model ranks a true positive case above a true negative case ~91% of the time, averaged across all 17 labels. Values above 0.85 are considered strong for multi-label clinical classification. Per-label AUC matters more than the macro average for individual conditions.</p>
+            </div>
+            <div class="interp-item">
+              <div class="interp-item-title">Why F1 is low despite high AUC</div>
+              <p>Macro F1 of 0.497 reflects severe label imbalance — rare conditions like Pulmonary Embolism or Cardiomyopathy have very few positive cases, driving down precision and recall even when AUC is high. F1 near 0.5 on a 17-label imbalanced task is expected and not a signal of model failure.</p>
+            </div>
+            <div class="interp-item">
+              <div class="interp-item-title">What's signal vs. noise</div>
+              <p>AUC differences &gt;0.01 between models are meaningful given the test set size (24,782 encounters). Differences &lt;0.005 should be treated as noise. Per-label comparisons on rare conditions (&lt;200 positive cases) are less reliable and should be interpreted with caution.</p>
+            </div>
+            <div class="interp-item">
+              <div class="interp-item-title">What these results don't show</div>
+              <p>These metrics are computed on retrospective ED data from a single institution (BIDMC). They do not reflect prospective clinical performance, and the model has not been validated on external patient populations. AUC measures ranking ability, not calibration — predicted probabilities should not be treated as direct risk estimates without further calibration.</p>
+            </div>
+          </div>
+        </div>
+
         <div class="res-legend" id="res-legend"></div>
 
         <div class="res-grid">
@@ -382,6 +515,69 @@
           <div class="res-stat">
             <div class="res-stat-val">24,782</div>
             <div class="res-stat-label">Test Encounters</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="limitations" class="section animate-on-scroll">
+      <div class="card card-reveal">
+        <h2>Limitations &amp; Failure Modes</h2>
+        <p>We believe honest evaluation requires acknowledging where the model falls short, not just where it succeeds. Below are the most significant limitations of the current system.</p>
+        <div class="limitations-grid">
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-1">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+              </svg>
+            </div>
+            <div class="limitation-title">Single-Institution Data</div>
+            <p>All data originates from Beth Israel Deaconess Medical Center (BIDMC) via MIMIC-IV. The model has not been tested on external patient populations. Demographic, equipment, and workflow differences at other institutions may significantly degrade performance.</p>
+          </div>
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+            </div>
+            <div class="limitation-title">Rare Condition Underperformance</div>
+            <p>Conditions with fewer than ~200 positive cases in the training set — such as Pulmonary Embolism, Cardiomyopathy, and some arrhythmia subtypes — have substantially lower per-label AUC and F1. Class weighting and SMOTE partially mitigate this, but these labels remain unreliable for clinical use.</p>
+          </div>
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+              </svg>
+            </div>
+            <div class="limitation-title">Missing Modality Handling</div>
+            <p>Not every ED encounter has an associated ECG recording. When ECG data is absent, the ECG encoder outputs a zero-padded embedding. The model was not explicitly trained on missing modality patterns, and performance on ECG-absent encounters may be lower than reported metrics suggest.</p>
+          </div>
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-4">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+              </svg>
+            </div>
+            <div class="limitation-title">ICD-10 Label Noise</div>
+            <p>Diagnosis codes are assigned at discharge and reflect billing and administrative practice as much as clinical ground truth. Under-coding and over-coding are common, particularly for secondary diagnoses. The model learns from these imperfect labels, which introduces noise into both training and evaluation.</p>
+          </div>
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-5">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <div class="limitation-title">No Prospective Validation</div>
+            <p>All results are retrospective. The model was trained and evaluated on historical encounter data, not deployed in a live clinical environment. Prospective performance — where patient outcomes are unknown at inference time — may differ, particularly for patients presenting with atypical symptom profiles.</p>
+          </div>
+          <div class="limitation-card">
+            <div class="limitation-icon limit-icon-6">
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              </svg>
+            </div>
+            <div class="limitation-title">Uncalibrated Probabilities</div>
+            <p>The sigmoid outputs represent relative risk ranking, not calibrated clinical probabilities. A predicted score of 0.7 does not mean 70% likelihood of that diagnosis. Without explicit probability calibration (e.g., Platt scaling or isotonic regression), outputs should not be presented to clinicians as direct probability estimates.</p>
           </div>
         </div>
       </div>
