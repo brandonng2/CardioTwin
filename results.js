@@ -253,22 +253,27 @@
 
     function drawBar() {
       var container = barSvgEl.parentElement;
-      var totalW = container.clientWidth || 400;
-      var isMobile = totalW < 480;
+      var totalW =
+        Math.floor(container.getBoundingClientRect().width) ||
+        container.clientWidth ||
+        400;
+      if (totalW < 10) return;
+      var isMobile = totalW < 520;
       var bM = {
-        top: 12,
-        right: 12,
-        bottom: isMobile ? 36 : 56,
-        left: isMobile ? 36 : 48,
+        top: 16,
+        right: 16,
+        bottom: isMobile ? 48 : 56,
+        left: isMobile ? 42 : 52,
       };
       var bW = totalW - bM.left - bM.right;
-      var bH = isMobile ? 170 : 240;
+      var bH = isMobile ? 180 : 220;
 
       barSvgEl.innerHTML = "";
       var bSvg = d3
         .select(barSvgEl)
         .attr("viewBox", "0 0 " + totalW + " " + (bH + bM.top + bM.bottom))
-        .attr("width", "100%");
+        .attr("width", "100%")
+        .attr("height", bH + bM.top + bM.bottom);
 
       var bG = bSvg
         .append("g")
@@ -372,7 +377,7 @@
 
     drawBar();
     new ResizeObserver(function () {
-      drawBar();
+      requestAnimationFrame(drawBar);
     }).observe(barSvgEl.parentElement);
 
     // ════════════════════════════════
@@ -390,21 +395,29 @@
 
     function drawRadar() {
       var container = radarSvgEl.parentElement;
-      var totalW = container.clientWidth || 360;
-      var isMobile = totalW < 380;
+      var totalW =
+        Math.floor(container.getBoundingClientRect().width) ||
+        container.clientWidth ||
+        360;
+      if (totalW < 10) return;
+      var isMobile = totalW < 400;
+      // Padding around the radar circle for axis labels
+      var labelPad = isMobile ? 36 : 48;
       var rW = totalW;
-      var rH = isMobile ? totalW * 0.88 : totalW * 0.78;
-      var rR = Math.min(rW, rH) * (isMobile ? 0.28 : 0.32);
+      // Height gives room for labels top + bottom
+      var rH = totalW + labelPad * 0.5;
+      var rR = Math.min(rW, rH) / 2 - labelPad - (isMobile ? 4 : 8);
       var rcx = rW / 2;
-      var rcy = rH / 2 + (isMobile ? 8 : 12);
-      var labelOffset = rR + (isMobile ? 22 : 30);
-      var fontSize = isMobile ? "11px" : "13px";
+      var rcy = rH / 2;
+      var labelOffset = rR + (isMobile ? 18 : 24);
+      var fontSize = isMobile ? "10px" : "12px";
 
       radarSvgEl.innerHTML = "";
       var rSvg = d3
         .select(radarSvgEl)
         .attr("viewBox", "0 0 " + rW + " " + rH)
-        .attr("width", "100%");
+        .attr("width", "100%")
+        .attr("height", rH);
       var rG = rSvg.append("g");
 
       [0.25, 0.5, 0.75, 1].forEach(function (t) {
@@ -494,7 +507,7 @@
 
     drawRadar();
     new ResizeObserver(function () {
-      drawRadar();
+      requestAnimationFrame(drawRadar);
     }).observe(radarSvgEl.parentElement);
 
     // ════════════════════════════════
@@ -504,14 +517,29 @@
 
     function drawHeatmap() {
       var container = hmSvgEl.closest(".res-heatmap-wrap");
-      var availW = container.clientWidth || 320;
+      var availW =
+        Math.floor(container.getBoundingClientRect().width) ||
+        container.clientWidth ||
+        320;
+      if (availW < 10) return;
       var isMobile = availW < 500;
 
-      var cellW = isMobile ? 36 : 54;
+      // Compute natural cell sizes
+      var cellWNatural = isMobile ? 36 : 54;
       var cellH = isMobile ? 28 : 38;
       var rowLabelW = isMobile ? 44 : 80;
       var colLabelH = isMobile ? 76 : 106;
       var hmM = { top: 20, right: 16, bottom: colLabelH + 24, left: rowLabelW };
+
+      // Natural content width
+      var hmWNatural = TARGETS.length * cellWNatural;
+      var totalWNatural = hmWNatural + hmM.left + hmM.right;
+
+      // If content fits, stretch cells to fill container; otherwise use natural size and scroll
+      var fits = totalWNatural <= availW;
+      var cellW = fits
+        ? Math.floor((availW - hmM.left - hmM.right) / TARGETS.length)
+        : cellWNatural;
       var hmW = TARGETS.length * cellW;
       var hmH = MODEL_KEYS.length * cellH;
       var totalW = hmW + hmM.left + hmM.right;
@@ -522,7 +550,7 @@
         .attr("viewBox", "0 0 " + totalW + " " + totalH)
         .attr("width", totalW)
         .attr("height", totalH)
-        .style("min-width", null)
+        .style("min-width", totalW + "px")
         .style("display", "block");
 
       var hmG = d3
@@ -715,7 +743,7 @@
 
     drawHeatmap();
     new ResizeObserver(function () {
-      drawHeatmap();
+      requestAnimationFrame(drawHeatmap);
     }).observe(hmSvgEl.closest(".res-heatmap-wrap"));
 
     // ── DETAIL PANEL ────────────────────────────────
