@@ -1,6 +1,10 @@
-# ClinicalDigitalTwin
+# CardioTwin
 
-An end-to-end pipeline for preprocessing MIMIC-IV clinical and ECG data and training multimodal cardiovascular diagnosis models — from XGBoost and MLP baselines through CardioTwin, a gated fusion deep learning digital twin.
+CardioTwin introduces a digital twin framework for cardiovascular care: a continuous, data-driven representation of a patient that integrates multimodal clinical signals into a unified model of their health state.
+
+By combining structured EHR data, time-series vitals, and ECG signals, CardioTwin learns a holistic representation that enables early prediction of cardiovascular conditions in emergency settings.
+
+This project provides an end-to-end pipeline for preprocessing MIMIC-IV clinical and ECG data and training multimodal cardiovascular diagnosis models, ranging from XGBoost and MLP baselines to CardioTwin, our gated fusion deep learning digital twin.
 
 ---
 
